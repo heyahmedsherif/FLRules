@@ -4,6 +4,8 @@ __pycache__/
 .env
 data/*.db
 data/*.db-journal
+data/alerts_log.json
+site/
 *.egg-info/
 dist/
 .ruff_cache/

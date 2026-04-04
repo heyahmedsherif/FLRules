@@ -121,5 +121,14 @@ def init_database():
     click.echo("Database initialized.")
 
 
+@cli.command()
+def build_site():
+    """Generate the static dashboard (site/index.html) for GitHub Pages."""
+    from flrules.static_site import generate_static_site
+
+    asyncio.run(generate_static_site())
+    click.echo("Static site generated in site/")
+
+
 if __name__ == "__main__":
     cli()

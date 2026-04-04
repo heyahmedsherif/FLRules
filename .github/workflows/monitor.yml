@@ -6,7 +6,17 @@ on:
     - cron: "0 12-22 * * 1-5"
     # Run twice daily on weekends
     - cron: "0 14,22 * * 0,6"
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch: # manual trigger
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   monitor:
@@ -35,15 +45,17 @@ jobs:
 
       - name: Run pipeline
         env:
-          # POC: alerts logged to console + data/alerts_log.json
-          # Add SMTP_* vars here when ready to send real emails
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
         run: flrules run --issues 5 --notify
 
-      - name: Upload database + alerts log
+      # Upload DB as artifact for persistence between runs
+      - name: Upload database
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -53,3 +65,20 @@ jobs:
             data/alerts_log.json
           retention-days: 90
           overwrite: true
+
+      # Deploy static dashboard to GitHub Pages
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy:
+    needs: monitor
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

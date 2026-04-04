@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     smtp_password: str = ""  # Gmail app password (not your real password)
     from_email: str = "alerts@yourdomain.org"
 
+    # SMS — Twilio
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+
     # Admin
     admin_secret: str = "change-me-in-production"
 

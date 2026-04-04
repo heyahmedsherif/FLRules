@@ -15,6 +15,7 @@ from flrules.models import Alert, FARIssue, FARNotice, Subscriber
 from flrules.notifier import notify_subscribers
 from flrules.relevance import filter_notices
 from flrules.scraper import ScrapedNotice, fetch_latest_issue_ids, scrape_issue
+from flrules.static_site import generate_static_site
 
 log = structlog.get_logger()
 
@@ -137,9 +138,14 @@ async def run_pipeline(issue_count: int = 3, notify: bool = True) -> dict:
                 if notify and subscribers:
                     delivery = await notify_subscribers(subscribers, alert, notice.url)
                     alert.notified = True
-                    stats["notifications_sent"] += delivery.get("email_sent", 0)
+                    stats["notifications_sent"] += (
+                        delivery.get("email_sent", 0) + delivery.get("sms_sent", 0)
+                    )
 
             await session.commit()
+
+    # Generate static dashboard for GitHub Pages
+    await generate_static_site()
 
     log.info("pipeline_complete", stats=stats)
     return stats
