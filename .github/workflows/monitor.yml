@@ -1,0 +1,41 @@
+name: Scheduled Monitor
+
+on:
+  schedule:
+    # Run every hour during business hours (Mon-Fri 8am-6pm ET)
+    - cron: "0 12-22 * * 1-5"
+    # Run twice daily on weekends
+    - cron: "0 14,22 * * 0,6"
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv pip install --system -e .
+
+      - name: Run pipeline
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
+        run: flrules run --issues 3 --notify
+
+      - name: Upload database artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flrules-db-${{ github.run_number }}
+          path: data/flrules.db
+          retention-days: 30
