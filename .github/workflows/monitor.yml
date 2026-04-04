@@ -24,18 +24,32 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system -e .
 
+      # Download previous DB if it exists (for continuity between runs)
+      - name: Restore previous database
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: flrules-db
+          path: data/
+          search_artifacts: true
+          if_no_artifact_found: warn
+
       - name: Run pipeline
         env:
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          # POC: alerts logged to console + data/alerts_log.json
+          # Add SMTP_* vars here when ready to send real emails
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER }}
-        run: flrules run --issues 3 --notify
+        run: flrules run --issues 5 --notify
 
-      - name: Upload database artifact
+      - name: Upload database + alerts log
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: flrules-db-${{ github.run_number }}
-          path: data/flrules.db
-          retention-days: 30
+          name: flrules-db
+          path: |
+            data/flrules.db
+            data/alerts_log.json
+          retention-days: 90
+          overwrite: true

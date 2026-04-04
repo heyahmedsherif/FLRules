@@ -21,14 +21,12 @@ class Settings(BaseSettings):
     # Polling
     poll_interval_minutes: int = 60
 
-    # Email — Resend
-    resend_api_key: str = ""
+    # Email — free SMTP (e.g. Gmail app password) for POC
+    smtp_host: str = ""  # e.g. "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""  # e.g. "you@gmail.com"
+    smtp_password: str = ""  # Gmail app password (not your real password)
     from_email: str = "alerts@yourdomain.org"
-
-    # SMS — Twilio
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_from_number: str = ""
 
     # Admin
     admin_secret: str = "change-me-in-production"

@@ -1,34 +1,31 @@
 """
-Notification system — sends email and SMS alerts to opted-in subscribers.
+Notification system — POC mode.
 
-Uses:
-  - Resend (https://resend.com) for email — generous free tier, simple API
-  - Twilio for SMS — pay-as-you-go, reliable
+POC: Alerts are logged to console and written to a local JSON file.
+     Optional free SMTP support (Gmail app password) for actual email delivery.
+
+Production upgrade path:
+  - Email: swap _send_smtp() for Resend/SendGrid/SES
+  - SMS:   add Twilio integration
 """
 
-import resend
+import json
+import smtplib
+from email.mime.text import MIMEText
+from pathlib import Path
+
 import structlog
-from twilio.rest import Client as TwilioClient
 
 from flrules.config import settings
 from flrules.models import Alert, Subscriber
 
 log = structlog.get_logger()
 
-
-def _init_resend():
-    if settings.resend_api_key:
-        resend.api_key = settings.resend_api_key
+ALERTS_LOG = Path(settings.database_url.split("///")[-1]).parent / "alerts_log.json"
 
 
-def _twilio_client() -> TwilioClient | None:
-    if settings.twilio_account_sid and settings.twilio_auth_token:
-        return TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
-    return None
-
-
-def _build_email_body(alert: Alert, notice_url: str) -> str:
-    """Build a plain-language email body for an alert."""
+def _build_alert_body(alert: Alert, notice_url: str) -> str:
+    """Build a plain-language alert body."""
     return f"""Florida Administrative Register Alert
 
 Category: {alert.category.replace('_', ' ').title()}
@@ -46,71 +43,82 @@ View the full notice:
 What this means: This notice was flagged because it contains language related to
 {alert.category.replace('_', ' ')}. We recommend reviewing the full text to assess
 whether it may affect your community or requires advocacy action.
-
----
-You are receiving this because you opted in to FLRules Monitor alerts.
-To unsubscribe, reply STOP or contact your organization admin.
 """
 
 
-def _build_sms_body(alert: Alert, notice_url: str) -> str:
-    """Build a concise SMS alert."""
-    cat = alert.category.replace("_", " ").title()
-    return (
-        f"FL Admin Register Alert [{cat}]: "
-        f"{alert.summary[:120]}... "
-        f"Details: {notice_url}"
+def _log_alert_to_file(alert: Alert, notice_url: str):
+    """Append alert to a local JSON log file for POC review."""
+    entry = {
+        "notice_id": alert.notice_id,
+        "category": alert.category,
+        "score": alert.relevance_score,
+        "summary": alert.summary,
+        "keywords": alert.matched_keywords,
+        "url": notice_url,
+        "created_at": str(alert.created_at),
+    }
+
+    existing = []
+    if ALERTS_LOG.exists():
+        try:
+            existing = json.loads(ALERTS_LOG.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    existing.append(entry)
+    ALERTS_LOG.write_text(json.dumps(existing, indent=2))
+    log.info("alert_logged_to_file", path=str(ALERTS_LOG), notice_id=alert.notice_id)
+
+
+async def send_email_alert(
+    subscriber: Subscriber, alert: Alert, notice_url: str
+) -> bool:
+    """Send email via free SMTP (Gmail app password) or log to console."""
+    if not subscriber.email:
+        return False
+
+    subject = f"FL Register Alert: {alert.category.replace('_', ' ').title()}"
+    body = _build_alert_body(alert, notice_url)
+
+    # If SMTP is configured, send real email
+    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
+        try:
+            msg = MIMEText(body)
+            msg["Subject"] = subject
+            msg["From"] = settings.from_email
+            msg["To"] = subscriber.email
+
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+                server.starttls()
+                server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+
+            log.info("email_sent", to=subscriber.email, alert_id=alert.id)
+            return True
+        except Exception as e:
+            log.error("email_failed", to=subscriber.email, error=str(e))
+            return False
+
+    # POC fallback: log to console
+    log.info(
+        "poc_email_alert",
+        to=subscriber.email,
+        subject=subject,
+        category=alert.category,
+        score=alert.relevance_score,
+        url=notice_url,
     )
-
-
-async def send_email_alert(subscriber: Subscriber, alert: Alert, notice_url: str) -> bool:
-    """Send an email alert to a single subscriber."""
-    _init_resend()
-    if not settings.resend_api_key or not subscriber.email:
-        log.warning("email_skipped", reason="no API key or email", subscriber_id=subscriber.id)
-        return False
-
-    try:
-        resend.Emails.send(
-            {
-                "from": settings.from_email,
-                "to": subscriber.email,
-                "subject": f"FL Register Alert: {alert.category.replace('_', ' ').title()}",
-                "text": _build_email_body(alert, notice_url),
-            }
-        )
-        log.info("email_sent", to=subscriber.email, alert_id=alert.id)
-        return True
-    except Exception as e:
-        log.error("email_failed", to=subscriber.email, error=str(e))
-        return False
-
-
-async def send_sms_alert(subscriber: Subscriber, alert: Alert, notice_url: str) -> bool:
-    """Send an SMS alert to a single subscriber."""
-    client = _twilio_client()
-    if not client or not subscriber.phone:
-        log.warning("sms_skipped", reason="no Twilio config or phone", subscriber_id=subscriber.id)
-        return False
-
-    try:
-        client.messages.create(
-            body=_build_sms_body(alert, notice_url),
-            from_=settings.twilio_from_number,
-            to=subscriber.phone,
-        )
-        log.info("sms_sent", to=subscriber.phone, alert_id=alert.id)
-        return True
-    except Exception as e:
-        log.error("sms_failed", to=subscriber.phone, error=str(e))
-        return False
+    return True
 
 
 async def notify_subscribers(
     subscribers: list[Subscriber], alert: Alert, notice_url: str
 ) -> dict:
     """Send alert to all matching subscribers. Returns delivery stats."""
-    stats = {"email_sent": 0, "email_failed": 0, "sms_sent": 0, "sms_failed": 0}
+    stats = {"email_sent": 0, "email_failed": 0}
+
+    # Always log to file for POC review
+    _log_alert_to_file(alert, notice_url)
 
     alert_categories = set(alert.category.split(","))
 
@@ -118,7 +126,6 @@ async def notify_subscribers(
         if not sub.active:
             continue
 
-        # Check category match
         sub_categories = set(sub.categories.split(","))
         if "all" not in sub_categories and not sub_categories & alert_categories:
             continue
@@ -126,10 +133,6 @@ async def notify_subscribers(
         if sub.notify_email and sub.email:
             ok = await send_email_alert(sub, alert, notice_url)
             stats["email_sent" if ok else "email_failed"] += 1
-
-        if sub.notify_sms and sub.phone:
-            ok = await send_sms_alert(sub, alert, notice_url)
-            stats["sms_sent" if ok else "sms_failed"] += 1
 
     log.info("notification_batch_complete", alert_id=alert.id, stats=stats)
     return stats

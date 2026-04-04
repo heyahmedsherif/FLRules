@@ -137,9 +137,7 @@ async def run_pipeline(issue_count: int = 3, notify: bool = True) -> dict:
                 if notify and subscribers:
                     delivery = await notify_subscribers(subscribers, alert, notice.url)
                     alert.notified = True
-                    stats["notifications_sent"] += (
-                        delivery["email_sent"] + delivery["sms_sent"]
-                    )
+                    stats["notifications_sent"] += delivery.get("email_sent", 0)
 
             await session.commit()
 
