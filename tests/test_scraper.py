@@ -4,7 +4,6 @@ import pytest
 
 from flrules.scraper import ScrapedNotice, fetch_latest_issue_ids
 
-
 MOCK_INDEX_HTML = """
 <html><body>
 <a href="View_Faw.asp?IID=4616">April 3, 2026</a>

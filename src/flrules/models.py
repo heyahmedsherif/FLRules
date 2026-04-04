@@ -1,7 +1,6 @@
 """Database models — SQLModel (SQLAlchemy + Pydantic hybrid)."""
 
 from datetime import datetime
-from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
@@ -57,8 +56,8 @@ class Subscriber(SQLModel, table=True):
     __tablename__ = "subscribers"
 
     id: int | None = Field(default=None, primary_key=True)
-    email: Optional[str] = None
-    phone: Optional[str] = None
+    email: str | None = None
+    phone: str | None = None
     name: str = ""
     notify_email: bool = True
     notify_sms: bool = False

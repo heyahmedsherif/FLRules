@@ -3,16 +3,14 @@ FastAPI web dashboard — admin interface for viewing alerts, managing subscribe
 and tuning keyword rules.
 """
 
-import asyncio
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from flrules.config import settings
 from flrules.db import get_session, init_db
 from flrules.models import Alert, FARIssue, FARNotice, Subscriber
 

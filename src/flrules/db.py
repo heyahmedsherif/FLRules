@@ -1,12 +1,20 @@
 """Database engine and session helpers."""
 
+from pathlib import Path
+
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 
 from flrules.config import settings
 
-engine = create_async_engine(settings.database_url, echo=False)
+# Ensure the data directory exists for SQLite
+_db_url = settings.database_url
+if "sqlite" in _db_url:
+    db_path = _db_url.split("///")[-1]
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+engine = create_async_engine(_db_url, echo=False)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
