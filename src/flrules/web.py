@@ -295,7 +295,7 @@ async def admin_subscribers(
     return HTMLResponse(content=_page("Manage Subscribers", content, user=user))
 
 
-@app.get("/admin/run")
+@app.get("/admin/run", response_class=HTMLResponse)
 async def admin_run_pipeline(
     request: Request,
     issue_count: int = Query(3, le=10),
@@ -305,7 +305,44 @@ async def admin_run_pipeline(
     from flrules.pipeline import run_pipeline
 
     stats = await run_pipeline(issue_count=issue_count, notify=notify)
-    return {"status": "completed", "stats": stats, "triggered_by": user.email}
+
+    stat_rows = ""
+    labels = {
+        "issues_checked": "Issues Checked",
+        "issues_new": "New Issues Found",
+        "notices_scraped": "Notices Scraped",
+        "notices_new": "New Notices Stored",
+        "alerts_generated": "Alerts Generated",
+        "notifications_sent": "Notifications Sent",
+    }
+    for key, label in labels.items():
+        val = stats.get(key, 0)
+        highlight = ' style="color:#10b981;font-weight:700"' if val > 0 and key in ("alerts_generated", "notifications_sent") else ""
+        stat_rows += f"<tr><td>{label}</td><td{highlight}>{val}</td></tr>"
+
+    alert_msg = ""
+    if stats.get("alerts_generated", 0) > 0:
+        alert_msg = f'<div style="background:#ecfdf5;border:1px solid #10b981;border-radius:8px;padding:1rem;margin-bottom:1rem;color:#065f46"><strong>{stats["alerts_generated"]} alert(s) generated!</strong> Check the dashboard to review.</div>'
+    elif stats.get("notices_new", 0) > 0:
+        alert_msg = f'<div style="background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:1rem;margin-bottom:1rem;color:#1e40af">Scanned {stats["notices_new"]} new notices. No relevant content found this time.</div>'
+    else:
+        alert_msg = '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin-bottom:1rem;color:#475569">No new issues to process. All recent FAR issues have already been scanned.</div>'
+
+    content = f"""
+<div class="section-header"><h2>Pipeline Run Complete</h2></div>
+{alert_msg}
+<div class="card" style="max-width:400px">
+  <h3>Run Summary</h3>
+  <table style="width:100%">
+    {stat_rows}
+  </table>
+</div>
+<div class="actions" style="margin-top:1.5rem">
+  <a class="btn" href="/">Back to Dashboard</a>
+  <a class="btn btn-outline" href="/admin/run?issue_count=5&notify=false">Run Again (5 issues)</a>
+</div>
+"""
+    return HTMLResponse(content=_page("Pipeline Results", content, user=user))
 
 
 # ── JSON API (requires login) ───────────────────────
