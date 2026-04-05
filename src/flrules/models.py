@@ -5,6 +5,21 @@ from datetime import datetime
 from sqlmodel import Field, SQLModel
 
 
+class User(SQLModel, table=True):
+    """A user who can log in via Google OAuth."""
+
+    __tablename__ = "users"
+
+    id: int | None = Field(default=None, primary_key=True)
+    google_id: str = Field(unique=True, index=True)
+    email: str = Field(unique=True, index=True)
+    name: str = ""
+    picture: str = ""
+    role: str = "member"  # "admin" or "member"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_login: datetime = Field(default_factory=datetime.utcnow)
+
+
 class FARIssue(SQLModel, table=True):
     """A single FAR daily publication."""
 

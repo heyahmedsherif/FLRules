@@ -33,8 +33,14 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_from_number: str = ""
 
-    # Admin
-    admin_secret: str = "change-me-in-production"
+    # Google OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    app_url: str = "http://localhost:8000"  # base URL for OAuth redirect
+    session_secret: str = "change-me-in-production"  # signs session cookies
+
+    # Admin — comma-separated list of Google emails that get admin role
+    admin_emails: str = "Ahmed.Sherif@hey.com"
 
     # Logging
     log_level: str = "INFO"

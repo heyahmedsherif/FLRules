@@ -1,20 +1,41 @@
 """
-FastAPI web dashboard — admin interface for viewing alerts, managing subscribers,
-and tuning keyword rules.
+FastAPI web app with Google OAuth login, role-based access, and dashboard.
+
+Routes:
+  /                  → Dashboard (requires login)
+  /auth/login        → Google OAuth login page
+  /auth/callback     → Google OAuth callback
+  /auth/logout       → Logout
+  /my/alerts         → Member's alert feed
+  /my/settings       → Member subscription settings
+  /admin/subscribers → Admin: manage subscribers
+  /admin/run         → Admin: trigger pipeline
+  /api/*             → JSON API endpoints
 """
 
+import secrets as _secrets
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from fastapi import Depends, FastAPI, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.sessions import SessionMiddleware
 
+from flrules.auth import (
+    get_current_user,
+    handle_callback,
+    handle_login,
+    handle_logout,
+    require_admin,
+    require_login,
+)
+from flrules.config import settings
 from flrules.db import get_session, init_db
-from flrules.models import Alert, FARIssue, FARNotice, Subscriber
+from flrules.models import Alert, FARIssue, FARNotice, Subscriber, User
 
-app = FastAPI(title="FLRules Monitor", version="0.1.0")
+app = FastAPI(title="FLRules Monitor", version="0.2.0")
+app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 
 
 @app.on_event("startup")
@@ -22,136 +43,277 @@ async def startup():
     await init_db()
 
 
-# ── Pydantic schemas ────────────────────────────────────────────
+# ── Auth routes ─────────────────────────────────────
 
-class SubscriberCreate(BaseModel):
-    email: str | None = None
-    phone: str | None = None
-    name: str = ""
-    categories: str = "all"
-    notify_email: bool = True
-    notify_sms: bool = False
+@app.get("/auth/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    user = await get_current_user(request)
+    if user:
+        return RedirectResponse(url="/", status_code=302)
+
+    html = _page("Sign In", """
+<div class="login-container">
+  <div class="login-card">
+    <div class="login-logo">
+      <svg width="48" height="48" viewBox="0 0 36 36" fill="none">
+        <rect x="4" y="2" width="20" height="28" rx="3" fill="#1e40af" opacity="0.15"/>
+        <rect x="6" y="4" width="20" height="28" rx="3" fill="#2563eb" opacity="0.3"/>
+        <rect x="8" y="6" width="20" height="28" rx="3" fill="white"/>
+        <circle cx="27" cy="27" r="9" fill="#2563eb"/>
+        <path d="M27 21.5c-3 0-5.5 1.5-5.5 1.5s0 5 1.5 7c1.5 2 4 3 4 3s2.5-1 4-3c1.5-2 1.5-7 1.5-7s-2.5-1.5-5.5-1.5z" fill="white" opacity="0.95"/>
+        <path d="M25 27l1.5 1.5 3-3" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h1>FLRules Monitor</h1>
+    <p class="login-subtitle">Florida Administrative Register<br>Civil Rights Alert System</p>
+    <a href="/auth/google" class="google-btn">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#34A853" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#FBBC05" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+      Sign in with Google
+    </a>
+    <p class="login-footer">Access is limited to authorized organization members.</p>
+  </div>
+</div>
+""", logged_in=False)
+    return HTMLResponse(content=html)
 
 
-class PipelineRunRequest(BaseModel):
-    issue_count: int = 3
-    notify: bool = False
+@app.get("/auth/google")
+async def google_login(request: Request):
+    return await handle_login(request)
 
 
-# ── API routes ──────────────────────────────────────────────────
+@app.get("/auth/callback")
+async def google_callback(request: Request):
+    return await handle_callback(request)
+
+
+@app.get("/auth/logout")
+async def logout(request: Request):
+    return await handle_logout(request)
+
+
+# ── Dashboard (requires login) ──────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(session: AsyncSession = Depends(get_session)):
-    """Minimal HTML dashboard — shows recent alerts and stats."""
-    alert_count = await session.scalar(select(func.count(Alert.id)))
-    notice_count = await session.scalar(select(func.count(FARNotice.id)))
-    issue_count = await session.scalar(select(func.count(FARIssue.id)))
-    sub_count = await session.scalar(select(func.count(Subscriber.id)))
+async def dashboard(
+    request: Request,
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
+):
+    alert_count = await session.scalar(select(func.count(Alert.id))) or 0
+    notice_count = await session.scalar(select(func.count(FARNotice.id))) or 0
+    issue_count = await session.scalar(select(func.count(FARIssue.id))) or 0
+    sub_count = await session.scalar(select(func.count(Subscriber.id))) or 0
 
     result = await session.execute(
         select(Alert).order_by(Alert.created_at.desc()).limit(25)
     )
-    recent_alerts = result.scalars().all()
+    alerts = result.scalars().all()
 
     alert_rows = ""
-    for a in recent_alerts:
+    for a in alerts:
+        ts = a.created_at.strftime("%Y-%m-%d %H:%M") if isinstance(a.created_at, datetime) else str(a.created_at)
         notified = "&#10003;" if a.notified else "&middot;"
-        alert_rows += f"""
-        <tr>
-            <td>{a.created_at.strftime('%Y-%m-%d %H:%M') if isinstance(a.created_at, datetime) else a.created_at}</td>
-            <td><span class="badge">{a.category}</span></td>
-            <td>{a.relevance_score:.1f}</td>
-            <td>{a.summary[:150]}</td>
-            <td>{notified}</td>
-        </tr>"""
+        alert_rows += f"""<tr>
+<td>{ts}</td>
+<td><span class="badge">{a.category}</span></td>
+<td>{a.relevance_score:.1f}</td>
+<td>{_esc(a.summary[:150])}</td>
+<td class="center">{notified}</td>
+</tr>"""
 
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FLRules Monitor</title>
-<style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ font-family: system-ui, -apple-system, sans-serif; background:#f8f9fa; color:#212529; padding:2rem; }}
-  h1 {{ margin-bottom:0.5rem; }}
-  .subtitle {{ color:#6c757d; margin-bottom:2rem; }}
-  .stats {{ display:flex; gap:1rem; margin-bottom:2rem; flex-wrap:wrap; }}
-  .stat {{ background:white; border-radius:8px; padding:1.25rem; min-width:150px; box-shadow:0 1px 3px rgba(0,0,0,0.1); }}
-  .stat .number {{ font-size:2rem; font-weight:700; color:#0d6efd; }}
-  .stat .label {{ color:#6c757d; font-size:0.875rem; }}
-  table {{ width:100%; border-collapse:collapse; background:white; border-radius:8px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.1); }}
-  th {{ background:#e9ecef; padding:0.75rem 1rem; text-align:left; font-size:0.875rem; text-transform:uppercase; color:#495057; }}
-  td {{ padding:0.75rem 1rem; border-top:1px solid #dee2e6; font-size:0.875rem; }}
-  .badge {{ background:#0d6efd; color:white; padding:2px 8px; border-radius:4px; font-size:0.75rem; }}
-  .actions {{ margin:1.5rem 0; }}
-  .btn {{ display:inline-block; padding:0.5rem 1rem; background:#0d6efd; color:white; border:none; border-radius:6px; cursor:pointer; text-decoration:none; font-size:0.875rem; }}
-  .btn:hover {{ background:#0b5ed7; }}
-  .btn-outline {{ background:transparent; border:1px solid #0d6efd; color:#0d6efd; }}
-</style>
-</head>
-<body>
-  <h1>FLRules Monitor</h1>
-  <p class="subtitle">Florida Administrative Register &mdash; Civil Rights Alert System</p>
+    admin_actions = ""
+    if user.role == "admin":
+        admin_actions = """
+<div class="actions">
+  <a class="btn" href="/admin/run?issue_count=3&notify=false" onclick="this.textContent='Running...'">Run Pipeline (dry)</a>
+  <a class="btn btn-outline" href="/admin/subscribers">Manage Subscribers</a>
+</div>"""
 
-  <div class="stats">
-    <div class="stat"><div class="number">{alert_count}</div><div class="label">Alerts</div></div>
-    <div class="stat"><div class="number">{notice_count}</div><div class="label">Notices Tracked</div></div>
-    <div class="stat"><div class="number">{issue_count}</div><div class="label">Issues Scanned</div></div>
-    <div class="stat"><div class="number">{sub_count}</div><div class="label">Subscribers</div></div>
-  </div>
-
-  <div class="actions">
-    <a class="btn" href="/api/run?issue_count=3&notify=false" onclick="this.textContent='Running...'"
-       >Run Pipeline (dry)</a>
-    <a class="btn btn-outline" href="/api/subscribers">View Subscribers</a>
-  </div>
-
-  <h2 style="margin:1rem 0">Recent Alerts</h2>
-  <table>
-    <thead><tr><th>Date</th><th>Category</th><th>Score</th><th>Summary</th><th>Sent</th></tr></thead>
-    <tbody>
-      {alert_rows if alert_rows else '<tr><td colspan="5" style="text-align:center;padding:2rem;color:#6c757d;">No alerts yet. Run the pipeline to start monitoring.</td></tr>'}
-    </tbody>
-  </table>
-</body>
-</html>"""
-    return HTMLResponse(content=html)
+    content = f"""
+<div class="stats">
+  <div class="stat"><div class="num">{alert_count}</div><div class="lbl">Alerts</div></div>
+  <div class="stat"><div class="num">{notice_count}</div><div class="lbl">Notices</div></div>
+  <div class="stat"><div class="num">{issue_count}</div><div class="lbl">Issues</div></div>
+  <div class="stat"><div class="num">{sub_count}</div><div class="lbl">Subscribers</div></div>
+</div>
+{admin_actions}
+<div class="section-header">
+  <h2>Recent Alerts</h2>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Date</th><th>Category</th><th>Score</th><th>Summary</th><th>Sent</th></tr></thead>
+  <tbody>
+    {alert_rows if alert_rows else '<tr><td colspan="5" class="empty">No alerts yet. The system is monitoring.</td></tr>'}
+  </tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(content=_page("Dashboard", content, user=user))
 
 
-@app.post("/api/subscribers", response_model=dict)
-async def create_subscriber(
-    body: SubscriberCreate, session: AsyncSession = Depends(get_session)
+# ── Member pages ─────────────────────────────────────
+
+@app.get("/my/settings", response_class=HTMLResponse)
+async def my_settings(
+    request: Request,
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
 ):
-    import secrets as _secrets
+    result = await session.execute(
+        select(Subscriber).where(Subscriber.email == user.email)
+    )
+    sub = result.scalar_one_or_none()
+
+    if sub:
+        status_html = f"""
+<div class="card">
+  <h3>Your Subscription</h3>
+  <p>Status: <span class="badge" style="background:#10b981">Active</span></p>
+  <p>Email notifications: {"On" if sub.notify_email else "Off"}</p>
+  <p>SMS notifications: {"On" if sub.notify_sms else "Off"}</p>
+  <p>Phone: {sub.phone or "Not set"}</p>
+  <p>Categories: {sub.categories}</p>
+  <form method="post" action="/my/unsubscribe" style="margin-top:1rem">
+    <button type="submit" class="btn btn-danger">Unsubscribe</button>
+  </form>
+</div>"""
+    else:
+        status_html = """
+<div class="card">
+  <h3>Not Subscribed</h3>
+  <p>You are not currently receiving alerts.</p>
+  <form method="post" action="/my/subscribe">
+    <div class="form-group">
+      <label>Phone (for SMS alerts, optional)</label>
+      <input type="tel" name="phone" placeholder="+1XXXXXXXXXX" class="input">
+    </div>
+    <div class="form-group">
+      <label>Categories</label>
+      <select name="categories" class="input">
+        <option value="all">All categories</option>
+        <option value="domestic_terrorism">Domestic Terrorism</option>
+        <option value="religious_freedom">Religious Freedom</option>
+        <option value="immigration">Immigration</option>
+        <option value="civil_rights">Civil Rights</option>
+        <option value="surveillance">Surveillance</option>
+        <option value="cabinet_meeting">Cabinet Meetings</option>
+        <option value="education">Education</option>
+      </select>
+    </div>
+    <button type="submit" class="btn">Subscribe to Alerts</button>
+  </form>
+</div>"""
+
+    return HTMLResponse(content=_page("My Settings", status_html, user=user))
+
+
+@app.post("/my/subscribe")
+async def my_subscribe(
+    request: Request,
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
+):
+    form = await request.form()
+    phone = form.get("phone", "")
+    categories = form.get("categories", "all")
+
+    existing = await session.execute(
+        select(Subscriber).where(Subscriber.email == user.email)
+    )
+    if existing.scalar_one_or_none():
+        return RedirectResponse(url="/my/settings", status_code=302)
 
     sub = Subscriber(
-        email=body.email,
-        phone=body.phone,
-        name=body.name,
-        categories=body.categories,
-        notify_email=body.notify_email,
-        notify_sms=body.notify_sms,
+        email=user.email,
+        phone=phone or None,
+        name=user.name,
+        categories=categories,
+        notify_email=True,
+        notify_sms=bool(phone),
         unsubscribe_token=_secrets.token_urlsafe(16),
     )
     session.add(sub)
     await session.commit()
-    await session.refresh(sub)
-    return {"id": sub.id, "email": sub.email, "status": "subscribed"}
+    return RedirectResponse(url="/my/settings", status_code=302)
 
 
-@app.get("/api/subscribers")
-async def list_subscribers(session: AsyncSession = Depends(get_session)):
-    result = await session.execute(select(Subscriber).order_by(Subscriber.created_at.desc()))
+@app.post("/my/unsubscribe")
+async def my_unsubscribe(
+    request: Request,
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Subscriber).where(Subscriber.email == user.email)
+    )
+    sub = result.scalar_one_or_none()
+    if sub:
+        sub.active = False
+        await session.commit()
+    return RedirectResponse(url="/my/settings", status_code=302)
+
+
+# ── Admin pages ──────────────────────────────────────
+
+@app.get("/admin/subscribers", response_class=HTMLResponse)
+async def admin_subscribers(
+    request: Request,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Subscriber).order_by(Subscriber.created_at.desc())
+    )
     subs = result.scalars().all()
-    return [
-        {"id": s.id, "email": s.email, "name": s.name, "active": s.active, "categories": s.categories}
-        for s in subs
-    ]
 
+    rows = ""
+    for s in subs:
+        status = '<span class="badge" style="background:#10b981">Active</span>' if s.active else '<span class="badge" style="background:#94a3b8">Inactive</span>'
+        rows += f"""<tr>
+<td>{_esc(s.name)}</td>
+<td>{_esc(s.email or "")}</td>
+<td>{_esc(s.phone or "")}</td>
+<td>{status}</td>
+<td>{s.categories}</td>
+</tr>"""
+
+    content = f"""
+<div class="section-header">
+  <h2>Subscribers ({len(subs)})</h2>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Status</th><th>Categories</th></tr></thead>
+  <tbody>
+    {rows if rows else '<tr><td colspan="5" class="empty">No subscribers yet.</td></tr>'}
+  </tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(content=_page("Manage Subscribers", content, user=user))
+
+
+@app.get("/admin/run")
+async def admin_run_pipeline(
+    request: Request,
+    issue_count: int = Query(3, le=10),
+    notify: bool = Query(False),
+    user: User = Depends(require_admin),
+):
+    from flrules.pipeline import run_pipeline
+
+    stats = await run_pipeline(issue_count=issue_count, notify=notify)
+    return {"status": "completed", "stats": stats, "triggered_by": user.email}
+
+
+# ── JSON API (requires login) ───────────────────────
 
 @app.get("/api/alerts")
-async def list_alerts(
+async def api_alerts(
     limit: int = Query(50, le=200),
+    user: User = Depends(require_login),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
@@ -171,28 +333,193 @@ async def list_alerts(
     ]
 
 
-@app.get("/api/run")
-async def trigger_pipeline(
-    issue_count: int = Query(3, le=10),
-    notify: bool = Query(False),
-):
-    """Trigger a pipeline run via the API."""
-    from flrules.pipeline import run_pipeline
+@app.get("/api/me")
+async def api_me(user: User = Depends(require_login)):
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "picture": user.picture,
+    }
 
-    stats = await run_pipeline(issue_count=issue_count, notify=notify)
-    return {"status": "completed", "stats": stats}
+
+# ── HTML helpers ─────────────────────────────────────
+
+def _esc(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-@app.delete("/api/subscribers/{subscriber_id}")
-async def deactivate_subscriber(
-    subscriber_id: int, session: AsyncSession = Depends(get_session)
-):
-    result = await session.execute(
-        select(Subscriber).where(Subscriber.id == subscriber_id)
-    )
-    sub = result.scalar_one_or_none()
-    if not sub:
-        raise HTTPException(404, "Subscriber not found")
-    sub.active = False
-    await session.commit()
-    return {"id": sub.id, "status": "deactivated"}
+def _page(title: str, content: str, user: User | None = None, logged_in: bool = True) -> str:
+    """Wrap content in the app shell with nav bar."""
+    nav_items = ""
+    user_menu = ""
+    if user:
+        nav_items = f"""
+<a href="/" class="nav-link">Dashboard</a>
+<a href="/my/settings" class="nav-link">My Settings</a>
+{"<a href='/admin/subscribers' class='nav-link'>Subscribers</a>" if user.role == "admin" else ""}
+"""
+        user_menu = f"""
+<div class="user-menu">
+  <img src="{user.picture}" alt="" class="avatar" referrerpolicy="no-referrer">
+  <span class="user-name">{_esc(user.name)}</span>
+  {"<span class='role-badge'>Admin</span>" if user.role == "admin" else ""}
+  <a href="/auth/logout" class="nav-link logout">Sign out</a>
+</div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} — FLRules Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {{
+  --bg: #f8fafc; --surface: #ffffff; --border: #e2e8f0;
+  --text: #0f172a; --text-secondary: #475569; --text-muted: #94a3b8;
+  --accent: #2563eb; --accent-light: #dbeafe;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+}}
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}}
+.navbar {{
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+  color: white; padding: 0 2rem; height: 56px;
+  display: flex; align-items: center; justify-content: space-between;
+}}
+.nav-brand {{
+  font-weight: 700; font-size: 1.1rem;
+  display: flex; align-items: center; gap: 0.5rem;
+  text-decoration: none; color: white;
+}}
+.nav-links {{ display: flex; align-items: center; gap: 0.25rem; }}
+.nav-link {{
+  color: #94a3b8; text-decoration: none; font-size: 0.85rem;
+  padding: 0.4rem 0.75rem; border-radius: 6px; font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}}
+.nav-link:hover {{ background: rgba(255,255,255,0.1); color: white; }}
+.user-menu {{
+  display: flex; align-items: center; gap: 0.5rem;
+}}
+.avatar {{
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.2);
+}}
+.user-name {{ font-size: 0.8rem; color: #94a3b8; }}
+.role-badge {{
+  font-size: 0.65rem; background: #2563eb; color: white;
+  padding: 1px 6px; border-radius: 999px; font-weight: 600;
+}}
+.logout {{ color: #64748b !important; font-size: 0.8rem; }}
+.container {{ max-width: 1100px; margin: 0 auto; padding: 1.5rem 2rem; }}
+.stats {{
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem; margin-bottom: 2rem;
+}}
+.stat {{
+  background: var(--surface); border-radius: var(--radius);
+  padding: 1.25rem; box-shadow: var(--shadow); border: 1px solid var(--border);
+}}
+.stat .num {{ font-size: 1.75rem; font-weight: 700; color: var(--accent); }}
+.stat .lbl {{ font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }}
+.section-header {{ margin: 2rem 0 1rem; }}
+.section-header h2 {{ font-size: 1.1rem; font-weight: 600; }}
+.table-wrap {{
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow); border: 1px solid var(--border); overflow: hidden;
+}}
+table {{ width: 100%; border-collapse: collapse; }}
+th {{
+  background: #f1f5f9; padding: 0.7rem 1rem; text-align: left;
+  font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-secondary);
+}}
+td {{ padding: 0.7rem 1rem; font-size: 0.85rem; border-top: 1px solid var(--border); }}
+tr:hover td {{ background: #f8fafc; }}
+.center {{ text-align: center; }}
+.empty {{ text-align: center; padding: 2rem; color: var(--text-muted); }}
+.badge {{
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 0.7rem; font-weight: 600; color: white; background: var(--accent);
+}}
+.actions {{ display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }}
+.btn {{
+  display: inline-block; padding: 0.5rem 1rem; background: var(--accent); color: white;
+  border: none; border-radius: 8px; cursor: pointer; text-decoration: none;
+  font-size: 0.85rem; font-weight: 500; font-family: inherit;
+}}
+.btn:hover {{ background: #1d4ed8; }}
+.btn-outline {{ background: transparent; border: 1px solid var(--accent); color: var(--accent); }}
+.btn-outline:hover {{ background: var(--accent-light); }}
+.btn-danger {{ background: #ef4444; }}
+.btn-danger:hover {{ background: #dc2626; }}
+.card {{
+  background: var(--surface); border-radius: var(--radius);
+  padding: 1.5rem; box-shadow: var(--shadow); border: 1px solid var(--border);
+  max-width: 500px;
+}}
+.card h3 {{ font-size: 1rem; margin-bottom: 0.75rem; }}
+.card p {{ font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.35rem; }}
+.form-group {{ margin-bottom: 1rem; }}
+.form-group label {{ display: block; font-size: 0.8rem; font-weight: 500; margin-bottom: 0.25rem; color: var(--text-secondary); }}
+.input {{
+  width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 0.85rem; font-family: inherit;
+}}
+.input:focus {{ outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }}
+/* Login page */
+.login-container {{
+  min-height: calc(100vh - 56px); display: flex; align-items: center;
+  justify-content: center; background: linear-gradient(135deg, #f8fafc, #e2e8f0);
+}}
+.login-card {{
+  background: white; border-radius: 16px; padding: 3rem 2.5rem;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.08); text-align: center;
+  max-width: 400px; width: 100%;
+}}
+.login-logo {{ margin-bottom: 1rem; }}
+.login-card h1 {{ font-size: 1.5rem; margin-bottom: 0.25rem; }}
+.login-subtitle {{ color: var(--text-muted); font-size: 0.875rem; margin-bottom: 2rem; line-height: 1.5; }}
+.google-btn {{
+  display: inline-flex; align-items: center; gap: 0.75rem;
+  padding: 0.75rem 1.5rem; background: white; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  font-size: 0.9rem; font-weight: 500; text-decoration: none;
+  font-family: inherit; cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}}
+.google-btn:hover {{ box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-color: #94a3b8; }}
+.login-footer {{ margin-top: 1.5rem; font-size: 0.75rem; color: var(--text-muted); }}
+@media (max-width: 640px) {{
+  .navbar {{ padding: 0 1rem; }}
+  .container {{ padding: 1rem; }}
+  .user-name {{ display: none; }}
+  .login-card {{ margin: 1rem; padding: 2rem 1.5rem; }}
+}}
+</style>
+</head>
+<body>
+{"" if not logged_in else f'''
+<nav class="navbar">
+  <div style="display:flex;align-items:center;gap:1.5rem">
+    <a href="/" class="nav-brand">FLRules Monitor</a>
+    <div class="nav-links">{nav_items}</div>
+  </div>
+  {user_menu}
+</nav>
+'''}
+<div class="container">
+{content}
+</div>
+</body>
+</html>"""
