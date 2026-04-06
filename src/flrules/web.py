@@ -130,15 +130,46 @@ async def dashboard(
   <a class="btn btn-outline" href="/admin/subscribers">Manage Subscribers</a>
 </div>"""
 
+    # Get recent notices for the dashboard
+    result = await session.execute(
+        select(FARNotice).order_by(FARNotice.fetched_at.desc()).limit(15)
+    )
+    recent_notices = result.scalars().all()
+
+    notice_rows = ""
+    for n in recent_notices:
+        section_badge = f'<span class="badge" style="background:#6366f1">{_esc(n.section_name[:25])}</span>'
+        notice_rows += f"""<tr>
+<td class="date-cell">{_esc(n.publish_date)}</td>
+<td>{section_badge}</td>
+<td style="font-family:monospace;font-size:0.8rem">{_esc(n.agency_code)}</td>
+<td><a href="/notices/{n.notice_id}" title="View details">{_esc(n.description[:100])}</a></td>
+<td><a href="{_esc(n.url)}" target="_blank" rel="noopener" style="font-size:0.75rem">FAR&nbsp;&#8599;</a></td>
+</tr>"""
+
+    # Get issues for the dashboard
+    result = await session.execute(
+        select(FARIssue).order_by(FARIssue.fetched_at.desc()).limit(10)
+    )
+    recent_issues = result.scalars().all()
+
+    issue_rows = ""
+    for i in recent_issues:
+        issue_rows += f"""<tr>
+<td>{_esc(i.publish_date)}</td>
+<td>{_esc(i.volume)}</td>
+<td><a href="/issues/{i.iid}">View notices</a></td>
+</tr>"""
+
     content = f"""
 <div class="stats">
-  <div class="stat"><div class="num">{alert_count}</div><div class="lbl">Alerts</div></div>
-  <div class="stat"><div class="num">{notice_count}</div><div class="lbl">Notices</div></div>
-  <div class="stat"><div class="num">{issue_count}</div><div class="lbl">Issues</div></div>
+  <div class="stat"><a href="#alerts" style="text-decoration:none;color:inherit"><div class="num">{alert_count}</div><div class="lbl">Alerts</div></a></div>
+  <div class="stat"><a href="#notices" style="text-decoration:none;color:inherit"><div class="num">{notice_count}</div><div class="lbl">Notices</div></a></div>
+  <div class="stat"><a href="#issues" style="text-decoration:none;color:inherit"><div class="num">{issue_count}</div><div class="lbl">Issues</div></a></div>
   <div class="stat"><div class="num">{sub_count}</div><div class="lbl">Subscribers</div></div>
 </div>
 {admin_actions}
-<div class="section-header">
+<div class="section-header" id="alerts">
   <h2>Recent Alerts</h2>
 </div>
 <div class="table-wrap">
@@ -149,8 +180,201 @@ async def dashboard(
   </tbody>
 </table>
 </div>
+
+<div class="section-header" id="notices">
+  <h2>Recent Notices</h2>
+  <span style="font-size:0.8rem;color:#94a3b8">{notice_count} total &middot; <a href="/notices">View all</a></span>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Published</th><th>Section</th><th>Agency</th><th>Description</th><th>Source</th></tr></thead>
+  <tbody>
+    {notice_rows if notice_rows else '<tr><td colspan="5" class="empty">No notices scanned yet.</td></tr>'}
+  </tbody>
+</table>
+</div>
+
+<div class="section-header" id="issues">
+  <h2>Scanned Issues</h2>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Published</th><th>Volume</th><th>Details</th></tr></thead>
+  <tbody>
+    {issue_rows if issue_rows else '<tr><td colspan="3" class="empty">No issues scanned yet.</td></tr>'}
+  </tbody>
+</table>
+</div>
 """
     return HTMLResponse(content=_page("Dashboard", content, user=user))
+
+
+# ── Detail pages ─────────────────────────────────────
+
+@app.get("/notices", response_class=HTMLResponse)
+async def notices_list(
+    request: Request,
+    page: int = Query(1, ge=1),
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
+):
+    per_page = 50
+    offset = (page - 1) * per_page
+    total = await session.scalar(select(func.count(FARNotice.id))) or 0
+
+    result = await session.execute(
+        select(FARNotice).order_by(FARNotice.fetched_at.desc()).offset(offset).limit(per_page)
+    )
+    notices = result.scalars().all()
+
+    rows = ""
+    for n in notices:
+        section_badge = f'<span class="badge" style="background:#6366f1">{_esc(n.section_name[:25])}</span>'
+        rows += f"""<tr>
+<td class="date-cell">{_esc(n.publish_date)}</td>
+<td>{section_badge}</td>
+<td style="font-family:monospace;font-size:0.8rem">{_esc(n.agency_code)}</td>
+<td><a href="/notices/{n.notice_id}">{_esc(n.description[:120])}</a></td>
+<td><a href="{_esc(n.url)}" target="_blank" rel="noopener" style="font-size:0.75rem">FAR&nbsp;&#8599;</a></td>
+</tr>"""
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    pagination = '<div style="margin-top:1rem;display:flex;gap:0.5rem;align-items:center">'
+    if page > 1:
+        pagination += f'<a class="btn btn-outline" href="/notices?page={page - 1}">&larr; Previous</a>'
+    pagination += f'<span style="color:#94a3b8;font-size:0.85rem">Page {page} of {total_pages} ({total} total)</span>'
+    if page < total_pages:
+        pagination += f'<a class="btn btn-outline" href="/notices?page={page + 1}">Next &rarr;</a>'
+    pagination += '</div>'
+
+    content = f"""
+<div class="section-header">
+  <h2>All Notices</h2>
+  <a class="btn btn-outline" href="/" style="font-size:0.8rem">&larr; Dashboard</a>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Published</th><th>Section</th><th>Agency</th><th>Description</th><th>Source</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table>
+</div>
+{pagination}
+"""
+    return HTMLResponse(content=_page("All Notices", content, user=user))
+
+
+@app.get("/notices/{notice_id}", response_class=HTMLResponse)
+async def notice_detail(
+    request: Request,
+    notice_id: int,
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(FARNotice).where(FARNotice.notice_id == notice_id)
+    )
+    notice = result.scalar_one_or_none()
+    if not notice:
+        return HTMLResponse(content=_page("Not Found", '<div class="empty-state"><h3>Notice not found</h3><a class="btn" href="/">Dashboard</a></div>', user=user), status_code=404)
+
+    # Check if this notice triggered any alerts
+    result = await session.execute(
+        select(Alert).where(Alert.notice_id == notice_id)
+    )
+    alert = result.scalar_one_or_none()
+
+    alert_html = ""
+    if alert:
+        alert_html = f"""
+<div style="background:#fef2f2;border:1px solid #ef4444;border-radius:8px;padding:1rem;margin-bottom:1rem">
+  <strong style="color:#dc2626">Alert triggered</strong> (score: {alert.relevance_score:.1f})<br>
+  <span style="font-size:0.85rem;color:#7f1d1d">{_esc(alert.summary)}</span>
+</div>"""
+
+    # Format the full text with line breaks
+    full_text = _esc(notice.full_text).replace("\n", "<br>") if notice.full_text else "<em style='color:#94a3b8'>Full text not available</em>"
+
+    content = f"""
+<div class="section-header">
+  <h2>Notice Detail</h2>
+  <a class="btn btn-outline" href="javascript:history.back()" style="font-size:0.8rem">&larr; Back</a>
+</div>
+{alert_html}
+<div class="card" style="max-width:100%">
+  <div style="display:grid;grid-template-columns:120px 1fr;gap:0.5rem 1rem;margin-bottom:1rem">
+    <span style="font-weight:600;color:#64748b;font-size:0.8rem">Notice ID</span>
+    <span>{notice.notice_id}</span>
+    <span style="font-weight:600;color:#64748b;font-size:0.8rem">Published</span>
+    <span>{_esc(notice.publish_date)}</span>
+    <span style="font-weight:600;color:#64748b;font-size:0.8rem">Section</span>
+    <span><span class="badge" style="background:#6366f1">{_esc(notice.section_name)}</span></span>
+    <span style="font-weight:600;color:#64748b;font-size:0.8rem">Agency</span>
+    <span style="font-family:monospace">{_esc(notice.agency_code)}</span>
+    <span style="font-weight:600;color:#64748b;font-size:0.8rem">Description</span>
+    <span>{_esc(notice.description)}</span>
+    <span style="font-weight:600;color:#64748b;font-size:0.8rem">Source</span>
+    <span><a href="{_esc(notice.url)}" target="_blank" rel="noopener">View on flrules.org &#8599;</a></span>
+  </div>
+  <hr style="border:none;border-top:1px solid #e2e8f0;margin:1rem 0">
+  <h3 style="font-size:0.9rem;margin-bottom:0.75rem">Full Text</h3>
+  <div style="font-size:0.85rem;color:#475569;line-height:1.7;max-height:600px;overflow-y:auto;padding-right:0.5rem">
+    {full_text}
+  </div>
+</div>
+"""
+    return HTMLResponse(content=_page(f"Notice {notice_id}", content, user=user))
+
+
+@app.get("/issues/{iid}", response_class=HTMLResponse)
+async def issue_detail(
+    request: Request,
+    iid: int,
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(FARIssue).where(FARIssue.iid == iid))
+    issue = result.scalar_one_or_none()
+    if not issue:
+        return HTMLResponse(content=_page("Not Found", '<div class="empty-state"><h3>Issue not found</h3><a class="btn" href="/">Dashboard</a></div>', user=user), status_code=404)
+
+    result = await session.execute(
+        select(FARNotice).where(FARNotice.issue_iid == iid).order_by(FARNotice.section_number)
+    )
+    notices = result.scalars().all()
+
+    rows = ""
+    for n in notices:
+        section_badge = f'<span class="badge" style="background:#6366f1">{_esc(n.section_name[:25])}</span>'
+        rows += f"""<tr>
+<td>{section_badge}</td>
+<td style="font-family:monospace;font-size:0.8rem">{_esc(n.agency_code)}</td>
+<td><a href="/notices/{n.notice_id}">{_esc(n.description[:120])}</a></td>
+<td><a href="{_esc(n.url)}" target="_blank" rel="noopener" style="font-size:0.75rem">FAR&nbsp;&#8599;</a></td>
+</tr>"""
+
+    content = f"""
+<div class="section-header">
+  <h2>FAR Issue — {_esc(issue.publish_date)}</h2>
+  <a class="btn btn-outline" href="/" style="font-size:0.8rem">&larr; Dashboard</a>
+</div>
+<div class="card" style="max-width:100%;margin-bottom:1rem">
+  <div style="display:flex;gap:2rem;font-size:0.875rem">
+    <div><span style="color:#64748b">Volume:</span> {_esc(issue.volume or 'N/A')}</div>
+    <div><span style="color:#64748b">Published:</span> {_esc(issue.publish_date)}</div>
+    <div><span style="color:#64748b">Notices:</span> {len(notices)}</div>
+    <div><span style="color:#64748b">Issue ID:</span> {iid}</div>
+  </div>
+</div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Section</th><th>Agency</th><th>Description</th><th>Source</th></tr></thead>
+  <tbody>
+    {rows if rows else '<tr><td colspan="4" class="empty">No notices found for this issue.</td></tr>'}
+  </tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(content=_page(f"Issue {issue.publish_date}", content, user=user))
 
 
 # ── Member pages ─────────────────────────────────────
