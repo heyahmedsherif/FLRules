@@ -114,7 +114,7 @@ async def send_opt_in_email(email: str, name: str = "") -> bool:
             msg["From"] = settings.from_email
             msg["To"] = email
 
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
                 server.starttls()
                 server.login(settings.smtp_user, settings.smtp_password)
                 server.send_message(msg)
@@ -146,7 +146,7 @@ async def send_email_alert(
             msg["From"] = settings.from_email
             msg["To"] = subscriber.email
 
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
                 server.starttls()
                 server.login(settings.smtp_user, settings.smtp_password)
                 server.send_message(msg)
