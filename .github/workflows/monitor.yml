@@ -43,6 +43,9 @@ jobs:
           search_artifacts: true
           if_no_artifact_found: warn
 
+      - name: Seed test subscriber
+        run: flrules subscribe --email Ahmed.Sherif@hey.com --name "Ahmed Sherif" --categories all
+
       - name: Run pipeline
         env:
           TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
