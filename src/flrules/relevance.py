@@ -19,7 +19,7 @@ from flrules.scraper import ScrapedNotice
 
 log = structlog.get_logger()
 
-THRESHOLD = 0.01  # TEMP: lowered for email test — revert to 1.0
+THRESHOLD = 1.0  # minimum score to generate an alert
 
 
 @dataclass
