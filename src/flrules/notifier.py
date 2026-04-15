@@ -55,7 +55,8 @@ def _build_sms_body(alert: Alert, notice_url: str) -> str:
     return (
         f"FL Register Alert [{cat}]: "
         f"{alert.summary[:120]}... "
-        f"Details: {notice_url}"
+        f"Details: {notice_url}\n"
+        f"Reply STOP to unsubscribe."
     )
 
 
@@ -146,6 +147,35 @@ async def send_sms_alert(
         return True
     except Exception as e:
         log.error("sms_failed", to=subscriber.phone, error=str(e))
+        return False
+
+
+async def send_opt_in_confirmation(phone: str) -> bool:
+    """Send opt-in confirmation SMS when a subscriber signs up.
+
+    Required by Twilio/TCPA compliance: subscribers must receive a
+    confirmation message that identifies the sender, describes the
+    service, and explains how to opt out.
+    """
+    client = _twilio_client()
+    if not client:
+        log.warning("opt_in_sms_skipped", reason="no Twilio config")
+        return False
+
+    try:
+        client.messages.create(
+            body=(
+                "FL Rules Monitor: You've opted in to receive FL Administrative "
+                "Register alerts via SMS. Msg frequency varies. Msg & data rates "
+                "may apply. Reply HELP for help, STOP to cancel."
+            ),
+            from_=settings.twilio_from_number,
+            to=phone,
+        )
+        log.info("opt_in_sms_sent", to=phone)
+        return True
+    except Exception as e:
+        log.error("opt_in_sms_failed", to=phone, error=str(e))
         return False
 
 

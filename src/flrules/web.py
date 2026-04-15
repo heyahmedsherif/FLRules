@@ -460,6 +460,12 @@ async def my_subscribe(
     )
     session.add(sub)
     await session.commit()
+
+    if phone:
+        from flrules.notifier import send_opt_in_confirmation
+
+        await send_opt_in_confirmation(phone)
+
     return RedirectResponse(url="/my/settings", status_code=302)
 
 
@@ -495,28 +501,245 @@ async def admin_subscribers(
     rows = ""
     for s in subs:
         status = '<span class="badge" style="background:#10b981">Active</span>' if s.active else '<span class="badge" style="background:#94a3b8">Inactive</span>'
+        toggle_label = "Deactivate" if s.active else "Activate"
+        toggle_color = "#94a3b8" if s.active else "#10b981"
+        channels = []
+        if s.notify_email:
+            channels.append("Email")
+        if s.notify_sms:
+            channels.append("SMS")
+        channel_str = ", ".join(channels) if channels else "None"
         rows += f"""<tr>
 <td>{_esc(s.name)}</td>
 <td>{_esc(s.email or "")}</td>
 <td>{_esc(s.phone or "")}</td>
 <td>{status}</td>
 <td>{s.categories}</td>
+<td>{channel_str}</td>
+<td style="white-space:nowrap">
+  <a href="/admin/subscribers/{s.id}/edit" class="btn btn-outline" style="padding:2px 8px;font-size:0.75rem">Edit</a>
+  <form method="post" action="/admin/subscribers/{s.id}/toggle" style="display:inline">
+    <button type="submit" class="btn" style="padding:2px 8px;font-size:0.75rem;background:{toggle_color}">{toggle_label}</button>
+  </form>
+  <form method="post" action="/admin/subscribers/{s.id}/delete" style="display:inline" onsubmit="return confirm('Delete {_esc(s.name or s.email or "")}?')">
+    <button type="submit" class="btn btn-danger" style="padding:2px 8px;font-size:0.75rem">Delete</button>
+  </form>
+</td>
 </tr>"""
 
     content = f"""
-<div class="section-header">
+<div class="section-header" style="display:flex;align-items:center;justify-content:space-between">
   <h2>Subscribers ({len(subs)})</h2>
+  <a class="btn" href="/admin/subscribers/add">+ Add Subscriber</a>
 </div>
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Status</th><th>Categories</th></tr></thead>
+  <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Status</th><th>Categories</th><th>Channels</th><th>Actions</th></tr></thead>
   <tbody>
-    {rows if rows else '<tr><td colspan="5" class="empty">No subscribers yet.</td></tr>'}
+    {rows if rows else '<tr><td colspan="7" class="empty">No subscribers yet.</td></tr>'}
   </tbody>
 </table>
 </div>
 """
     return HTMLResponse(content=_page("Manage Subscribers", content, user=user))
+
+
+@app.get("/admin/subscribers/add", response_class=HTMLResponse)
+async def admin_add_subscriber_form(
+    request: Request,
+    user: User = Depends(require_admin),
+):
+    content = """
+<div class="section-header">
+  <h2>Add Subscriber</h2>
+  <a class="btn btn-outline" href="/admin/subscribers" style="font-size:0.8rem">&larr; Back</a>
+</div>
+<div class="card">
+  <form method="post" action="/admin/subscribers/add">
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" name="name" class="input" placeholder="Full name">
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" name="email" class="input" placeholder="user@example.com">
+    </div>
+    <div class="form-group">
+      <label>Phone (for SMS)</label>
+      <input type="tel" name="phone" class="input" placeholder="+1XXXXXXXXXX">
+    </div>
+    <div class="form-group">
+      <label>Categories</label>
+      <select name="categories" class="input">
+        <option value="all">All categories</option>
+        <option value="domestic_terrorism">Domestic Terrorism</option>
+        <option value="religious_freedom">Religious Freedom</option>
+        <option value="immigration">Immigration</option>
+        <option value="civil_rights">Civil Rights</option>
+        <option value="surveillance">Surveillance</option>
+        <option value="cabinet_meeting">Cabinet Meetings</option>
+        <option value="education">Education</option>
+        <option value="nonprofit_regulation">Nonprofit Regulation</option>
+      </select>
+    </div>
+    <div class="form-group" style="display:flex;gap:1.5rem">
+      <label><input type="checkbox" name="notify_email" checked> Email alerts</label>
+      <label><input type="checkbox" name="notify_sms"> SMS alerts</label>
+    </div>
+    <button type="submit" class="btn">Add Subscriber</button>
+  </form>
+</div>
+"""
+    return HTMLResponse(content=_page("Add Subscriber", content, user=user))
+
+
+@app.post("/admin/subscribers/add")
+async def admin_add_subscriber(
+    request: Request,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    form = await request.form()
+    email = form.get("email", "").strip() or None
+    phone = form.get("phone", "").strip() or None
+    name = form.get("name", "").strip()
+    categories = form.get("categories", "all")
+    notify_email = "notify_email" in form
+    notify_sms = "notify_sms" in form
+
+    sub = Subscriber(
+        email=email,
+        phone=phone,
+        name=name,
+        categories=categories,
+        notify_email=notify_email,
+        notify_sms=notify_sms,
+        unsubscribe_token=_secrets.token_urlsafe(16),
+    )
+    session.add(sub)
+    await session.commit()
+
+    if phone and notify_sms:
+        from flrules.notifier import send_opt_in_confirmation
+
+        await send_opt_in_confirmation(phone)
+
+    return RedirectResponse(url="/admin/subscribers", status_code=302)
+
+
+@app.get("/admin/subscribers/{sub_id}/edit", response_class=HTMLResponse)
+async def admin_edit_subscriber_form(
+    request: Request,
+    sub_id: int,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(Subscriber).where(Subscriber.id == sub_id))
+    sub = result.scalar_one_or_none()
+    if not sub:
+        return RedirectResponse(url="/admin/subscribers", status_code=302)
+
+    category_options = ""
+    for val, label in [
+        ("all", "All categories"),
+        ("domestic_terrorism", "Domestic Terrorism"),
+        ("religious_freedom", "Religious Freedom"),
+        ("immigration", "Immigration"),
+        ("civil_rights", "Civil Rights"),
+        ("surveillance", "Surveillance"),
+        ("cabinet_meeting", "Cabinet Meetings"),
+        ("education", "Education"),
+        ("nonprofit_regulation", "Nonprofit Regulation"),
+    ]:
+        selected = "selected" if sub.categories == val else ""
+        category_options += f'<option value="{val}" {selected}>{label}</option>'
+
+    content = f"""
+<div class="section-header">
+  <h2>Edit Subscriber</h2>
+  <a class="btn btn-outline" href="/admin/subscribers" style="font-size:0.8rem">&larr; Back</a>
+</div>
+<div class="card">
+  <form method="post" action="/admin/subscribers/{sub.id}/edit">
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" name="name" class="input" value="{_esc(sub.name)}">
+    </div>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" name="email" class="input" value="{_esc(sub.email or "")}">
+    </div>
+    <div class="form-group">
+      <label>Phone (for SMS)</label>
+      <input type="tel" name="phone" class="input" value="{_esc(sub.phone or "")}">
+    </div>
+    <div class="form-group">
+      <label>Categories</label>
+      <select name="categories" class="input">{category_options}</select>
+    </div>
+    <div class="form-group" style="display:flex;gap:1.5rem">
+      <label><input type="checkbox" name="notify_email" {"checked" if sub.notify_email else ""}> Email alerts</label>
+      <label><input type="checkbox" name="notify_sms" {"checked" if sub.notify_sms else ""}> SMS alerts</label>
+    </div>
+    <button type="submit" class="btn">Save Changes</button>
+  </form>
+</div>
+"""
+    return HTMLResponse(content=_page("Edit Subscriber", content, user=user))
+
+
+@app.post("/admin/subscribers/{sub_id}/edit")
+async def admin_edit_subscriber(
+    request: Request,
+    sub_id: int,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(Subscriber).where(Subscriber.id == sub_id))
+    sub = result.scalar_one_or_none()
+    if not sub:
+        return RedirectResponse(url="/admin/subscribers", status_code=302)
+
+    form = await request.form()
+    sub.name = form.get("name", "").strip()
+    sub.email = form.get("email", "").strip() or None
+    sub.phone = form.get("phone", "").strip() or None
+    sub.categories = form.get("categories", "all")
+    sub.notify_email = "notify_email" in form
+    sub.notify_sms = "notify_sms" in form
+
+    await session.commit()
+    return RedirectResponse(url="/admin/subscribers", status_code=302)
+
+
+@app.post("/admin/subscribers/{sub_id}/toggle")
+async def admin_toggle_subscriber(
+    request: Request,
+    sub_id: int,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(Subscriber).where(Subscriber.id == sub_id))
+    sub = result.scalar_one_or_none()
+    if sub:
+        sub.active = not sub.active
+        await session.commit()
+    return RedirectResponse(url="/admin/subscribers", status_code=302)
+
+
+@app.post("/admin/subscribers/{sub_id}/delete")
+async def admin_delete_subscriber(
+    request: Request,
+    sub_id: int,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(Subscriber).where(Subscriber.id == sub_id))
+    sub = result.scalar_one_or_none()
+    if sub:
+        await session.delete(sub)
+        await session.commit()
+    return RedirectResponse(url="/admin/subscribers", status_code=302)
 
 
 @app.get("/admin/run", response_class=HTMLResponse)

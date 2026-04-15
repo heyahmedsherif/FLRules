@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from flrules.db import async_session, init_db
 from flrules.models import Alert, FARIssue, FARNotice, Subscriber
-from flrules.notifier import notify_subscribers
+from flrules.notifier import notify_subscribers, send_opt_in_confirmation
 from flrules.relevance import filter_notices
 from flrules.scraper import ScrapedNotice, fetch_latest_issue_ids, scrape_issue
 from flrules.static_site import generate_static_site
@@ -175,4 +175,8 @@ async def add_subscriber(
         await session.commit()
         await session.refresh(sub)
         log.info("subscriber_added", id=sub.id, email=email)
+
+        if phone and notify_sms:
+            await send_opt_in_confirmation(phone)
+
         return sub
