@@ -1,8 +1,9 @@
 """
-Notification system — SMS via Twilio, email via free SMTP.
+Notification system — SMS via Twilio, email via Resend (or SMTP fallback).
 
-POC: Alerts are also logged to console and written to a local JSON file.
-     Email via Gmail app password (free). SMS via Twilio (pay-as-you-go).
+Email: Resend API (works on Railway, any cloud). Falls back to SMTP if no API key.
+SMS: Twilio (pay-as-you-go, requires toll-free verification).
+Alerts are also logged to a local JSON file for audit.
 """
 
 import json
@@ -10,6 +11,7 @@ import smtplib
 from email.mime.text import MIMEText
 from pathlib import Path
 
+import resend
 import structlog
 from twilio.rest import Client as TwilioClient
 
@@ -17,6 +19,45 @@ from flrules.config import settings
 from flrules.models import Alert, Subscriber
 
 log = structlog.get_logger()
+
+
+def _send_email(to: str, subject: str, body: str) -> bool:
+    """Send an email via Resend API (primary) or SMTP (fallback)."""
+    if settings.resend_api_key:
+        try:
+            resend.api_key = settings.resend_api_key
+            resend.Emails.send({
+                "from": settings.from_email,
+                "to": [to],
+                "subject": subject,
+                "text": body,
+            })
+            log.info("email_sent_resend", to=to, subject=subject)
+            return True
+        except Exception as e:
+            log.error("email_failed_resend", to=to, error=str(e))
+            return False
+
+    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
+        try:
+            msg = MIMEText(body)
+            msg["Subject"] = subject
+            msg["From"] = settings.from_email
+            msg["To"] = to
+
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+                server.starttls()
+                server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+
+            log.info("email_sent_smtp", to=to, subject=subject)
+            return True
+        except Exception as e:
+            log.error("email_failed_smtp", to=to, error=str(e))
+            return False
+
+    log.warning("email_skipped", reason="no Resend API key or SMTP config", to=to)
+    return False
 
 ALERTS_LOG = Path(settings.database_url.split("///")[-1]).parent / "alerts_log.json"
 
@@ -85,11 +126,7 @@ def _log_alert_to_file(alert: Alert, notice_url: str):
 
 
 async def send_opt_in_email(email: str, name: str = "") -> bool:
-    """Send a welcome email when a subscriber is added.
-
-    Lets the subscriber know they've been opted in, what to expect,
-    and who to contact to unsubscribe.
-    """
+    """Send a welcome email when a subscriber is added."""
     if not email:
         return False
 
@@ -107,66 +144,20 @@ async def send_opt_in_email(email: str, name: str = "") -> bool:
         "— FLRules Monitor\n"
     )
 
-    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
-        try:
-            msg = MIMEText(body)
-            msg["Subject"] = "Welcome to FL Rules Monitor"
-            msg["From"] = settings.from_email
-            msg["To"] = email
-
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
-                server.starttls()
-                server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-
-            log.info("opt_in_email_sent", to=email)
-            return True
-        except Exception as e:
-            log.error("opt_in_email_failed", to=email, error=str(e))
-            return False
-
-    log.info("opt_in_email_skipped", reason="no SMTP config", to=email)
+    return _send_email(email, "Welcome to FL Rules Monitor", body)
     return False
 
 
 async def send_email_alert(
     subscriber: Subscriber, alert: Alert, notice_url: str
 ) -> bool:
-    """Send email via free SMTP (Gmail app password) or log to console."""
+    """Send an alert email via Resend or SMTP."""
     if not subscriber.email:
         return False
 
     subject = f"FL Register Alert: {alert.category.replace('_', ' ').title()}"
     body = _build_alert_body(alert, notice_url)
-
-    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
-        try:
-            msg = MIMEText(body)
-            msg["Subject"] = subject
-            msg["From"] = settings.from_email
-            msg["To"] = subscriber.email
-
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
-                server.starttls()
-                server.login(settings.smtp_user, settings.smtp_password)
-                server.send_message(msg)
-
-            log.info("email_sent", to=subscriber.email, alert_id=alert.id)
-            return True
-        except Exception as e:
-            log.error("email_failed", to=subscriber.email, error=str(e))
-            return False
-
-    # Fallback: log to console
-    log.info(
-        "poc_email_alert",
-        to=subscriber.email,
-        subject=subject,
-        category=alert.category,
-        score=alert.relevance_score,
-        url=notice_url,
-    )
-    return True
+    return _send_email(subscriber.email, subject, body)
 
 
 async def send_sms_alert(

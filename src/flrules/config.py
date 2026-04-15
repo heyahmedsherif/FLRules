@@ -21,12 +21,15 @@ class Settings(BaseSettings):
     # Polling
     poll_interval_minutes: int = 60
 
-    # Email — free SMTP (e.g. Gmail app password) for POC
-    smtp_host: str = ""  # e.g. "smtp.gmail.com"
+    # Email — Resend API (primary) or SMTP fallback
+    resend_api_key: str = ""  # from resend.com
+    from_email: str = "onboarding@resend.dev"  # Resend default; change after domain verification
+
+    # SMTP fallback (used by GitHub Actions where Resend isn't needed)
+    smtp_host: str = ""
     smtp_port: int = 587
-    smtp_user: str = ""  # e.g. "you@gmail.com"
-    smtp_password: str = ""  # Gmail app password (not your real password)
-    from_email: str = "alerts@yourdomain.org"
+    smtp_user: str = ""
+    smtp_password: str = ""
 
     # SMS — Twilio
     twilio_account_sid: str = ""
