@@ -34,14 +34,14 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system -e .
 
-      # Download previous DB if it exists (for continuity between runs)
-      - name: Restore previous database
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: flrules-db
-          path: data/
-          search_artifacts: true
-          if_no_artifact_found: warn
+      # TEMP: DB restore disabled for email test — forces fresh scrape
+      # - name: Restore previous database
+      #   uses: dawidd6/action-download-artifact@v6
+      #   with:
+      #     name: flrules-db
+      #     path: data/
+      #     search_artifacts: true
+      #     if_no_artifact_found: warn
 
       - name: Seed test subscriber
         run: flrules subscribe --email Ahmed.Sherif@hey.com --name "Ahmed Sherif" --categories all
