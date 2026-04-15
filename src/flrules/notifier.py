@@ -84,6 +84,51 @@ def _log_alert_to_file(alert: Alert, notice_url: str):
     log.info("alert_logged_to_file", path=str(ALERTS_LOG), notice_id=alert.notice_id)
 
 
+async def send_opt_in_email(email: str, name: str = "") -> bool:
+    """Send a welcome email when a subscriber is added.
+
+    Lets the subscriber know they've been opted in, what to expect,
+    and who to contact to unsubscribe.
+    """
+    if not email:
+        return False
+
+    greeting = f"Hi {name},\n\n" if name else "Hi,\n\n"
+    body = (
+        f"{greeting}"
+        "You've been subscribed to FL Rules Monitor — a civil rights alert system "
+        "that monitors the Florida Administrative Register for rule changes, "
+        "proposed regulations, emergency rules, and meeting notices.\n\n"
+        "What to expect:\n"
+        "  - Email alerts when relevant notices are published\n"
+        "  - Alert frequency varies (typically a few per week)\n\n"
+        "If you did not expect this message or wish to unsubscribe, "
+        "please reply to this email.\n\n"
+        "— FLRules Monitor\n"
+    )
+
+    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
+        try:
+            msg = MIMEText(body)
+            msg["Subject"] = "Welcome to FL Rules Monitor"
+            msg["From"] = settings.from_email
+            msg["To"] = email
+
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+                server.starttls()
+                server.login(settings.smtp_user, settings.smtp_password)
+                server.send_message(msg)
+
+            log.info("opt_in_email_sent", to=email)
+            return True
+        except Exception as e:
+            log.error("opt_in_email_failed", to=email, error=str(e))
+            return False
+
+    log.info("opt_in_email_skipped", reason="no SMTP config", to=email)
+    return False
+
+
 async def send_email_alert(
     subscriber: Subscriber, alert: Alert, notice_url: str
 ) -> bool:

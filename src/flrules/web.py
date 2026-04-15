@@ -461,9 +461,11 @@ async def my_subscribe(
     session.add(sub)
     await session.commit()
 
-    if phone:
-        from flrules.notifier import send_opt_in_confirmation
+    from flrules.notifier import send_opt_in_confirmation, send_opt_in_email
 
+    await send_opt_in_email(user.email, user.name)
+
+    if phone:
         await send_opt_in_confirmation(phone)
 
     return RedirectResponse(url="/my/settings", status_code=302)
@@ -619,9 +621,12 @@ async def admin_add_subscriber(
     session.add(sub)
     await session.commit()
 
-    if phone and notify_sms:
-        from flrules.notifier import send_opt_in_confirmation
+    from flrules.notifier import send_opt_in_confirmation, send_opt_in_email
 
+    if email and notify_email:
+        await send_opt_in_email(email, name)
+
+    if phone and notify_sms:
         await send_opt_in_confirmation(phone)
 
     return RedirectResponse(url="/admin/subscribers", status_code=302)
