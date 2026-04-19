@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Email — Resend API (primary) or SMTP fallback
     resend_api_key: str = ""  # from resend.com
-    from_email: str = "onboarding@resend.dev"  # Resend default; change after domain verification
+    from_email: str = "alerts@gearnerd.io"
 
     # SMTP fallback (used by GitHub Actions where Resend isn't needed)
     smtp_host: str = ""
