@@ -29,6 +29,7 @@ def _send_email(to: str, subject: str, body: str) -> bool:
             resend.Emails.send({
                 "from": settings.from_email,
                 "to": [to],
+                "reply_to": "contact@gearnerd.io",
                 "subject": subject,
                 "text": body,
             })
@@ -44,6 +45,7 @@ def _send_email(to: str, subject: str, body: str) -> bool:
             msg["Subject"] = subject
             msg["From"] = settings.from_email
             msg["To"] = to
+            msg["Reply-To"] = "contact@gearnerd.io"
 
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
                 server.starttls()
