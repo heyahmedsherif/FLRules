@@ -70,8 +70,9 @@ def _twilio_client() -> TwilioClient | None:
     return None
 
 
-def _build_alert_body(alert: Alert, notice_url: str) -> str:
+def _build_alert_body(alert: Alert, notice_url: str, unsubscribe_url: str = "") -> str:
     """Build a plain-language alert body."""
+    unsub_line = f"\nUnsubscribe: {unsubscribe_url}\n" if unsubscribe_url else ""
     return f"""Florida Administrative Register Alert
 
 Category: {alert.category.replace('_', ' ').title()}
@@ -89,7 +90,7 @@ View the full notice:
 What this means: This notice was flagged because it contains language related to
 {alert.category.replace('_', ' ')}. We recommend reviewing the full text to assess
 whether it may affect your community or requires advocacy action.
-"""
+{unsub_line}"""
 
 
 def _build_sms_body(alert: Alert, notice_url: str) -> str:
@@ -127,12 +128,17 @@ def _log_alert_to_file(alert: Alert, notice_url: str):
     log.info("alert_logged_to_file", path=str(ALERTS_LOG), notice_id=alert.notice_id)
 
 
-async def send_opt_in_email(email: str, name: str = "") -> bool:
+async def send_opt_in_email(email: str, name: str = "", unsubscribe_token: str = "") -> bool:
     """Send a welcome email when a subscriber is added."""
     if not email:
         return False
 
     greeting = f"Hi {name},\n\n" if name else "Hi,\n\n"
+    unsub_line = ""
+    if unsubscribe_token:
+        unsub_url = f"{settings.app_url}/unsubscribe/{unsubscribe_token}"
+        unsub_line = f"\nUnsubscribe: {unsub_url}\n"
+
     body = (
         f"{greeting}"
         "You've been subscribed to FL Rules Monitor — a civil rights alert system "
@@ -142,12 +148,12 @@ async def send_opt_in_email(email: str, name: str = "") -> bool:
         "  - Email alerts when relevant notices are published\n"
         "  - Alert frequency varies (typically a few per week)\n\n"
         "If you did not expect this message or wish to unsubscribe, "
-        "please reply to this email.\n\n"
+        "click the link below.\n\n"
         "— FLRules Monitor\n"
+        f"{unsub_line}"
     )
 
     return _send_email(email, "Welcome to FL Rules Monitor", body)
-    return False
 
 
 async def send_email_alert(
@@ -157,8 +163,12 @@ async def send_email_alert(
     if not subscriber.email:
         return False
 
+    unsub_url = ""
+    if subscriber.unsubscribe_token:
+        unsub_url = f"{settings.app_url}/unsubscribe/{subscriber.unsubscribe_token}"
+
     subject = f"FL Register Alert: {alert.category.replace('_', ' ').title()}"
-    body = _build_alert_body(alert, notice_url)
+    body = _build_alert_body(alert, notice_url, unsub_url)
     return _send_email(subscriber.email, subject, body)
 
 

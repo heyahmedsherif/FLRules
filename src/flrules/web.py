@@ -464,7 +464,7 @@ async def my_subscribe(
 
     from flrules.notifier import send_opt_in_confirmation, send_opt_in_email
 
-    asyncio.create_task(send_opt_in_email(user.email, user.name))
+    asyncio.create_task(send_opt_in_email(user.email, user.name, sub.unsubscribe_token))
 
     if phone:
         asyncio.create_task(send_opt_in_confirmation(phone))
@@ -486,6 +486,63 @@ async def my_unsubscribe(
         sub.active = False
         await session.commit()
     return RedirectResponse(url="/my/settings", status_code=302)
+
+
+# ── Public unsubscribe (no login required) ──────────
+
+@app.get("/unsubscribe/{token}", response_class=HTMLResponse)
+async def public_unsubscribe(
+    token: str,
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Subscriber).where(Subscriber.unsubscribe_token == token)
+    )
+    sub = result.scalar_one_or_none()
+
+    if not sub:
+        return HTMLResponse(content=_page("Unsubscribe", """
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>Invalid Link</h3>
+  <p>This unsubscribe link is not valid or has already been used.</p>
+</div>""", logged_in=False))
+
+    if not sub.active:
+        return HTMLResponse(content=_page("Unsubscribe", """
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>Already Unsubscribed</h3>
+  <p>You have already been unsubscribed from FL Rules Monitor alerts.</p>
+</div>""", logged_in=False))
+
+    return HTMLResponse(content=_page("Unsubscribe", f"""
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>Unsubscribe from FL Rules Monitor</h3>
+  <p>Are you sure you want to stop receiving alerts at <strong>{_esc(sub.email or sub.phone or "")}</strong>?</p>
+  <form method="post" action="/unsubscribe/{token}" style="margin-top:1rem">
+    <button type="submit" class="btn btn-danger">Yes, unsubscribe me</button>
+  </form>
+  <p style="margin-top:1rem;font-size:0.8rem;color:#94a3b8">You can re-subscribe at any time by contacting your administrator.</p>
+</div>""", logged_in=False))
+
+
+@app.post("/unsubscribe/{token}")
+async def public_unsubscribe_confirm(
+    token: str,
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Subscriber).where(Subscriber.unsubscribe_token == token)
+    )
+    sub = result.scalar_one_or_none()
+    if sub:
+        sub.active = False
+        await session.commit()
+
+    return HTMLResponse(content=_page("Unsubscribed", """
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>You've been unsubscribed</h3>
+  <p>You will no longer receive FL Rules Monitor alerts. If this was a mistake, please contact your administrator.</p>
+</div>""", logged_in=False))
 
 
 # ── Admin pages ──────────────────────────────────────
@@ -625,7 +682,7 @@ async def admin_add_subscriber(
     from flrules.notifier import send_opt_in_confirmation, send_opt_in_email
 
     if email and notify_email:
-        asyncio.create_task(send_opt_in_email(email, name))
+        asyncio.create_task(send_opt_in_email(email, name, sub.unsubscribe_token))
 
     if phone and notify_sms:
         asyncio.create_task(send_opt_in_confirmation(phone))

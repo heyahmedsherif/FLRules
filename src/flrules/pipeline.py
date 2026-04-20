@@ -177,7 +177,7 @@ async def add_subscriber(
         log.info("subscriber_added", id=sub.id, email=email)
 
         if email and notify_email:
-            await send_opt_in_email(email, name)
+            await send_opt_in_email(email, name, sub.unsubscribe_token)
 
         if phone and notify_sms:
             await send_opt_in_confirmation(phone)
