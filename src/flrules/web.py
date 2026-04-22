@@ -103,14 +103,14 @@ async def public_signup_page():
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:1rem 0">
         <div style="margin-bottom:0.75rem">
           <label style="font-size:0.85rem;display:flex;align-items:flex-start;gap:0.5rem;cursor:pointer">
-            <input type="checkbox" name="consent_email" checked style="margin-top:3px">
+            <input type="checkbox" name="consent_email" style="margin-top:3px">
             <span>I consent to receive <strong>email alerts</strong> from FL Rules Monitor about Florida Administrative Register updates.</span>
           </label>
         </div>
         <div>
           <label style="font-size:0.85rem;display:flex;align-items:flex-start;gap:0.5rem;cursor:pointer">
             <input type="checkbox" name="consent_sms" style="margin-top:3px">
-            <span>I consent to receive <strong>SMS/text message alerts</strong> from FL Rules Monitor at the mobile number provided above. Message frequency varies. Message and data rates may apply. Reply STOP to unsubscribe or HELP for help at any time.</span>
+            <span>I consent to receive <strong>SMS/text message alerts</strong> from FL Rules Monitor (operated by Intuitive Dataframe, LLC) at the mobile number provided above. Message frequency varies (typically a few per week). Message and data rates may apply. Reply STOP to unsubscribe or HELP for help at any time.</span>
           </label>
         </div>
       </div>
@@ -213,9 +213,10 @@ async def privacy_policy():
     advertising, or any other purpose.</p>
 
     <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Data Sharing</h3>
-    <p>We never sell, rent, or share your personal information with third parties. Your contact details
-    are only transmitted to our email delivery service (Resend) and SMS delivery service (Twilio)
-    for the sole purpose of delivering your alerts.</p>
+    <p>We do not sell, rent, or share your personal information with any third parties for marketing
+    or advertising purposes. Your contact details are only used by our service delivery infrastructure
+    to send your alerts. We do not share your opt-in consent or phone number with any affiliates,
+    partners, or other organizations.</p>
 
     <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Data Storage</h3>
     <p>Your information is stored securely in our database. We use industry-standard security practices
