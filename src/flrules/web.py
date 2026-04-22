@@ -44,6 +44,254 @@ async def startup():
     await init_db()
 
 
+# ── Public pages (no login required) ────────────────
+
+@app.get("/signup", response_class=HTMLResponse)
+async def public_signup_page():
+    """Public SMS opt-in page — visible to Twilio reviewers and the public."""
+    html = _page("Subscribe to Alerts", """
+<div style="max-width:600px;margin:2rem auto">
+  <div class="card" style="max-width:100%">
+    <div style="text-align:center;margin-bottom:1.5rem">
+      <svg width="48" height="48" viewBox="0 0 36 36" fill="none">
+        <rect x="4" y="2" width="20" height="28" rx="3" fill="#1e40af" opacity="0.15"/>
+        <rect x="6" y="4" width="20" height="28" rx="3" fill="#2563eb" opacity="0.3"/>
+        <rect x="8" y="6" width="20" height="28" rx="3" fill="white"/>
+        <circle cx="27" cy="27" r="9" fill="#2563eb"/>
+        <path d="M27 21.5c-3 0-5.5 1.5-5.5 1.5s0 5 1.5 7c1.5 2 4 3 4 3s2.5-1 4-3c1.5-2 1.5-7 1.5-7s-2.5-1.5-5.5-1.5z" fill="white" opacity="0.95"/>
+        <path d="M25 27l1.5 1.5 3-3" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h2 style="margin-top:0.5rem">FL Rules Monitor</h2>
+      <p style="color:#64748b;font-size:0.9rem">Florida Administrative Register Alert System</p>
+    </div>
+
+    <p style="font-size:0.9rem;color:#475569;line-height:1.6;margin-bottom:1.5rem">
+      Subscribe to receive <strong>text message alerts</strong> when the Florida Administrative Register
+      publishes rule changes, proposed regulations, emergency rules, or meeting notices relevant to
+      civil rights. This is a free public service alert system.
+    </p>
+
+    <form method="post" action="/signup">
+      <div class="form-group">
+        <label>Full Name <span style="color:#ef4444">*</span></label>
+        <input type="text" name="name" class="input" placeholder="Your full name" required>
+      </div>
+      <div class="form-group">
+        <label>Email Address <span style="color:#ef4444">*</span></label>
+        <input type="email" name="email" class="input" placeholder="you@example.com" required>
+      </div>
+      <div class="form-group">
+        <label>Mobile Phone Number (for SMS alerts)</label>
+        <input type="tel" name="phone" class="input" placeholder="+1XXXXXXXXXX">
+        <span style="font-size:0.75rem;color:#94a3b8">US numbers only. Include country code (+1).</span>
+      </div>
+      <div class="form-group">
+        <label>Alert Categories</label>
+        <select name="categories" class="input">
+          <option value="all">All categories</option>
+          <option value="domestic_terrorism">Domestic Terrorism Designations</option>
+          <option value="religious_freedom">Religious Freedom</option>
+          <option value="immigration">Immigration</option>
+          <option value="civil_rights">Civil Rights</option>
+          <option value="surveillance">Surveillance</option>
+          <option value="cabinet_meeting">Cabinet Meetings</option>
+          <option value="education">Education</option>
+          <option value="nonprofit_regulation">Nonprofit Regulation</option>
+        </select>
+      </div>
+
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:1rem 0">
+        <div style="margin-bottom:0.75rem">
+          <label style="font-size:0.85rem;display:flex;align-items:flex-start;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" name="consent_email" checked style="margin-top:3px">
+            <span>I consent to receive <strong>email alerts</strong> from FL Rules Monitor about Florida Administrative Register updates.</span>
+          </label>
+        </div>
+        <div>
+          <label style="font-size:0.85rem;display:flex;align-items:flex-start;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" name="consent_sms" style="margin-top:3px">
+            <span>I consent to receive <strong>SMS/text message alerts</strong> from FL Rules Monitor at the mobile number provided above. Message frequency varies. Message and data rates may apply. Reply STOP to unsubscribe or HELP for help at any time.</span>
+          </label>
+        </div>
+      </div>
+
+      <button type="submit" class="btn" style="width:100%;padding:0.75rem;font-size:1rem">Subscribe to Alerts</button>
+    </form>
+
+    <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e2e8f0">
+      <p style="font-size:0.75rem;color:#94a3b8;line-height:1.5">
+        <strong>Program:</strong> FL Rules Monitor by Intuitive Dataframe, LLC<br>
+        <strong>Purpose:</strong> Automated alerts when Florida state agencies publish rules, regulations, or meeting notices relevant to civil rights.<br>
+        <strong>Message frequency:</strong> Varies; typically a few alerts per week.<br>
+        <strong>Message and data rates may apply.</strong><br>
+        <strong>To opt out:</strong> Reply STOP to any text message, or click the unsubscribe link in any email.<br>
+        <strong>For help:</strong> Reply HELP to any text message, or email contact@gearnerd.io.<br>
+        <strong>Privacy:</strong> Your phone number and email are stored securely and never shared with third parties.
+        We only use your contact information to deliver alerts from this service.<br>
+        <a href="/privacy" style="color:#2563eb">Privacy Policy</a> &middot; <a href="/terms" style="color:#2563eb">Terms of Service</a>
+      </p>
+    </div>
+  </div>
+</div>
+""", logged_in=False)
+    return HTMLResponse(content=html)
+
+
+@app.post("/signup")
+async def public_signup_submit(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    form = await request.form()
+    name = form.get("name", "").strip()
+    email = form.get("email", "").strip()
+    phone = form.get("phone", "").strip() or None
+    categories = form.get("categories", "all")
+    consent_email = "consent_email" in form
+    consent_sms = "consent_sms" in form
+
+    if not email:
+        return RedirectResponse(url="/signup", status_code=302)
+
+    # Check if already subscribed
+    existing = await session.execute(
+        select(Subscriber).where(Subscriber.email == email)
+    )
+    if existing.scalar_one_or_none():
+        return HTMLResponse(content=_page("Already Subscribed", """
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>Already Subscribed</h3>
+  <p>This email address is already subscribed to FL Rules Monitor alerts.</p>
+  <a class="btn" href="/signup">Back</a>
+</div>""", logged_in=False))
+
+    sub = Subscriber(
+        email=email,
+        phone=phone if consent_sms else None,
+        name=name,
+        categories=categories,
+        notify_email=consent_email,
+        notify_sms=consent_sms and bool(phone),
+        unsubscribe_token=_secrets.token_urlsafe(16),
+    )
+    session.add(sub)
+    await session.commit()
+
+    from flrules.notifier import send_opt_in_confirmation, send_opt_in_email
+
+    if consent_email:
+        asyncio.create_task(send_opt_in_email(email, name, sub.unsubscribe_token))
+
+    if consent_sms and phone:
+        asyncio.create_task(send_opt_in_confirmation(phone))
+
+    return HTMLResponse(content=_page("Subscribed", f"""
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>You're Subscribed!</h3>
+  <p>Thank you, {_esc(name)}. You will receive FL Rules Monitor alerts at <strong>{_esc(email)}</strong>
+  {"and via SMS at <strong>" + _esc(phone) + "</strong>" if consent_sms and phone else ""}.</p>
+  <p style="color:#64748b;font-size:0.85rem;margin-top:1rem">A confirmation message has been sent. You can unsubscribe at any time.</p>
+</div>""", logged_in=False))
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    """Public privacy policy page."""
+    return HTMLResponse(content=_page("Privacy Policy", """
+<div style="max-width:700px;margin:2rem auto">
+  <h2>Privacy Policy</h2>
+  <p style="color:#64748b;font-size:0.85rem;margin-bottom:1.5rem">Last updated: April 2026</p>
+
+  <div style="font-size:0.9rem;color:#475569;line-height:1.7">
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">What We Collect</h3>
+    <p>When you subscribe to FL Rules Monitor, we collect your name, email address, and optionally your
+    mobile phone number. This information is used solely to deliver alerts about the Florida Administrative Register.</p>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">How We Use Your Information</h3>
+    <p>We use your contact information exclusively to send you alerts about Florida Administrative Register
+    publications that match your selected categories. We do not use your information for marketing,
+    advertising, or any other purpose.</p>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Data Sharing</h3>
+    <p>We never sell, rent, or share your personal information with third parties. Your contact details
+    are only transmitted to our email delivery service (Resend) and SMS delivery service (Twilio)
+    for the sole purpose of delivering your alerts.</p>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Data Storage</h3>
+    <p>Your information is stored securely in our database. We use industry-standard security practices
+    to protect your data.</p>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Opting Out</h3>
+    <p>You can unsubscribe at any time by:</p>
+    <ul style="margin:0.5rem 0 0.5rem 1.5rem">
+      <li>Clicking the unsubscribe link in any email</li>
+      <li>Replying STOP to any text message</li>
+      <li>Emailing contact@gearnerd.io</li>
+    </ul>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">SMS/Text Messages</h3>
+    <p>If you opt in to SMS alerts:</p>
+    <ul style="margin:0.5rem 0 0.5rem 1.5rem">
+      <li>Message frequency varies (typically a few per week)</li>
+      <li>Message and data rates may apply</li>
+      <li>Reply STOP to cancel at any time</li>
+      <li>Reply HELP for assistance</li>
+      <li>Carriers are not liable for delayed or undelivered messages</li>
+    </ul>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Contact</h3>
+    <p>For questions about this privacy policy or your data, contact us at
+    <a href="mailto:contact@gearnerd.io">contact@gearnerd.io</a>.</p>
+
+    <p style="margin-top:1.5rem"><strong>Operated by:</strong> Intuitive Dataframe, LLC</p>
+  </div>
+</div>
+""", logged_in=False))
+
+
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_of_service():
+    """Public terms of service page."""
+    return HTMLResponse(content=_page("Terms of Service", """
+<div style="max-width:700px;margin:2rem auto">
+  <h2>Terms of Service</h2>
+  <p style="color:#64748b;font-size:0.85rem;margin-bottom:1.5rem">Last updated: April 2026</p>
+
+  <div style="font-size:0.9rem;color:#475569;line-height:1.7">
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Service Description</h3>
+    <p>FL Rules Monitor is a free public service alert system that monitors the Florida Administrative
+    Register for rule changes, proposed regulations, emergency rules, and meeting notices relevant to
+    civil rights. Alerts are delivered via email and optionally via SMS text messages.</p>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Consent to Receive Messages</h3>
+    <p>By subscribing to FL Rules Monitor, you consent to receive automated alert messages at the email
+    address and/or mobile phone number you provide. For SMS alerts:</p>
+    <ul style="margin:0.5rem 0 0.5rem 1.5rem">
+      <li>You confirm that you are the owner or authorized user of the phone number provided</li>
+      <li>You understand that message frequency varies</li>
+      <li>You understand that message and data rates may apply</li>
+      <li>You may opt out at any time by replying STOP</li>
+      <li>You may get help by replying HELP or emailing contact@gearnerd.io</li>
+    </ul>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">No Guarantee</h3>
+    <p>While we strive to provide timely and accurate alerts, we make no guarantee that all relevant
+    notices will be detected or that alerts will be delivered without delay. This service supplements,
+    but does not replace, direct monitoring of the Florida Administrative Register.</p>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Modifications</h3>
+    <p>We reserve the right to modify or discontinue this service at any time. We will make reasonable
+    efforts to notify subscribers of significant changes.</p>
+
+    <h3 style="font-size:1rem;margin:1.5rem 0 0.5rem">Contact</h3>
+    <p>For questions, contact <a href="mailto:contact@gearnerd.io">contact@gearnerd.io</a>.</p>
+
+    <p style="margin-top:1.5rem"><strong>Operated by:</strong> Intuitive Dataframe, LLC</p>
+  </div>
+</div>
+""", logged_in=False))
+
+
 # ── Auth routes ─────────────────────────────────────
 
 @app.get("/auth/login", response_class=HTMLResponse)
