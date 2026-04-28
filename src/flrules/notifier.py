@@ -97,7 +97,7 @@ def _build_sms_body(alert: Alert, notice_url: str) -> str:
     """Build a concise SMS alert."""
     cat = alert.category.replace("_", " ").title()
     return (
-        f"FL Register Alert [{cat}]: "
+        f"FL Rules Monitor: {cat} alert — "
         f"{alert.summary[:120]}... "
         f"Details: {notice_url}\n"
         f"Reply STOP to unsubscribe."
