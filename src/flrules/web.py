@@ -342,13 +342,91 @@ async def logout(request: Request):
     return await handle_logout(request)
 
 
-# ── Dashboard (requires login) ──────────────────────
+# ── Public landing page / Dashboard ─────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(
+async def home(
     request: Request,
-    user: User = Depends(require_login),
     session: AsyncSession = Depends(get_session),
+):
+    user = await get_current_user(request)
+    if not user:
+        # Public landing page — visible to Twilio reviewers and unauthenticated visitors
+        landing_html = _page("FL Rules Monitor", """
+<div style="max-width:800px;margin:2rem auto">
+  <div style="text-align:center;margin-bottom:2rem">
+    <svg width="64" height="64" viewBox="0 0 36 36" fill="none">
+      <rect x="4" y="2" width="20" height="28" rx="3" fill="#1e40af" opacity="0.15"/>
+      <rect x="6" y="4" width="20" height="28" rx="3" fill="#2563eb" opacity="0.3"/>
+      <rect x="8" y="6" width="20" height="28" rx="3" fill="white"/>
+      <circle cx="27" cy="27" r="9" fill="#2563eb"/>
+      <path d="M27 21.5c-3 0-5.5 1.5-5.5 1.5s0 5 1.5 7c1.5 2 4 3 4 3s2.5-1 4-3c1.5-2 1.5-7 1.5-7s-2.5-1.5-5.5-1.5z" fill="white" opacity="0.95"/>
+      <path d="M25 27l1.5 1.5 3-3" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h1 style="margin-top:1rem;font-size:2rem">FL Rules Monitor</h1>
+    <p style="color:#64748b;font-size:1.1rem;margin-top:0.5rem">Florida Administrative Register Civil Rights Alert System</p>
+  </div>
+
+  <div class="card" style="max-width:100%;margin-bottom:1.5rem">
+    <h2 style="font-size:1.2rem;margin-bottom:0.75rem">About This Service</h2>
+    <p style="color:#475569;line-height:1.7;margin-bottom:0.75rem">
+      <strong>FL Rules Monitor</strong> is a free public service alert system that automatically monitors the
+      <a href="https://flrules.org" target="_blank" rel="noopener" style="color:#2563eb">Florida Administrative Register</a>
+      for rule changes, proposed regulations, emergency rules, and meeting notices relevant to civil rights.
+    </p>
+    <p style="color:#475569;line-height:1.7;margin-bottom:0.75rem">
+      When the system detects relevant content — such as domestic terrorism designations, religious freedom rules,
+      surveillance programs, immigration policies, or civil rights notices — it sends alerts to opted-in subscribers
+      via email and SMS.
+    </p>
+    <p style="color:#475569;line-height:1.7">
+      This service is operated by <strong>Intuitive Dataframe, LLC</strong>, a Florida-based civic technology company.
+    </p>
+  </div>
+
+  <div class="card" style="max-width:100%;margin-bottom:1.5rem">
+    <h2 style="font-size:1.2rem;margin-bottom:0.75rem">What We Monitor</h2>
+    <ul style="color:#475569;line-height:1.8;margin-left:1.5rem">
+      <li><strong>Domestic Terrorism Designations</strong> — Organization designations and material support rules</li>
+      <li><strong>Religious Freedom</strong> — Mosque, Islamic organization, and faith-based policies</li>
+      <li><strong>Surveillance</strong> — Fusion centers, biometrics, and watchlists</li>
+      <li><strong>Cabinet Meetings</strong> — Governor and Cabinet agendas and executive orders</li>
+      <li><strong>Immigration</strong> — Refugee, asylum, and ICE cooperation policies</li>
+      <li><strong>Civil Rights</strong> — Hate crimes, profiling, and discrimination rules</li>
+      <li><strong>Education</strong> — Curriculum bans and DEI restrictions</li>
+      <li><strong>Nonprofit Regulation</strong> — Charity registration and foreign agent rules</li>
+    </ul>
+  </div>
+
+  <div class="card" style="max-width:100%;margin-bottom:1.5rem;text-align:center;background:#f0f9ff;border-color:#bae6fd">
+    <h2 style="font-size:1.2rem;margin-bottom:0.5rem">Subscribe to Alerts</h2>
+    <p style="color:#475569;margin-bottom:1rem">Get notified by email and/or SMS when relevant notices are published.</p>
+    <a class="btn" href="/signup" style="padding:0.75rem 1.5rem;font-size:1rem">Subscribe Now</a>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem">
+    <a href="/privacy" style="text-decoration:none;color:#475569;text-align:center;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">Privacy Policy</a>
+    <a href="/terms" style="text-decoration:none;color:#475569;text-align:center;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">Terms of Service</a>
+    <a href="/auth/login" style="text-decoration:none;color:#475569;text-align:center;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">Staff Login</a>
+  </div>
+
+  <div style="text-align:center;color:#94a3b8;font-size:0.85rem;padding:1rem;border-top:1px solid #e2e8f0">
+    <p style="margin-bottom:0.25rem"><strong>Operated by:</strong> Intuitive Dataframe, LLC</p>
+    <p style="margin-bottom:0.25rem"><strong>Contact:</strong> <a href="mailto:contact@gearnerd.io" style="color:#2563eb">contact@gearnerd.io</a></p>
+    <p>Tampa, Florida, USA</p>
+  </div>
+</div>
+""", logged_in=False)
+        return HTMLResponse(content=landing_html)
+
+    # Logged-in dashboard
+    return await _dashboard(request, user, session)
+
+
+async def _dashboard(
+    request: Request,
+    user: User,
+    session: AsyncSession,
 ):
     alert_count = await session.scalar(select(func.count(Alert.id))) or 0
     notice_count = await session.scalar(select(func.count(FARNotice.id))) or 0
