@@ -10,13 +10,7 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
   actions: read
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
 
 jobs:
   monitor:
@@ -52,6 +46,7 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: flrules run --issues 5 --notify
 
       # Upload DB as artifact for persistence between runs
@@ -65,20 +60,3 @@ jobs:
             data/alerts_log.json
           retention-days: 90
           overwrite: true
-
-      # Deploy static dashboard to GitHub Pages
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/
-
-  deploy:
-    needs: monitor
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
