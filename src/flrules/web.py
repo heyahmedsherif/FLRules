@@ -139,7 +139,7 @@ async def public_signup_submit(
 ):
     form = await request.form()
     name = form.get("name", "").strip()
-    email = form.get("email", "").strip()
+    email = form.get("email", "").strip().lower()
     phone = form.get("phone", "").strip() or None
     categories = _parse_categories_form(form.getlist("categories"))
     consent_email = "consent_email" in form
@@ -148,9 +148,9 @@ async def public_signup_submit(
     if not email:
         return RedirectResponse(url="/signup", status_code=302)
 
-    # Check if already subscribed
+    # Check if already subscribed (case-insensitive against any legacy mixed-case rows)
     existing = await session.execute(
-        select(Subscriber).where(Subscriber.email == email)
+        select(Subscriber).where(func.lower(Subscriber.email) == email)
     )
     if existing.scalar_one_or_none():
         return HTMLResponse(content=_page("Already Subscribed", """
@@ -969,7 +969,7 @@ async def public_login_send(
 
     if email:
         result = await session.execute(
-            select(Subscriber).where(Subscriber.email == email)
+            select(Subscriber).where(func.lower(Subscriber.email) == email)
         )
         sub = result.scalar_one_or_none()
         if sub and sub.active and sub.unsubscribe_token:
@@ -1241,7 +1241,7 @@ async def admin_add_subscriber(
     session: AsyncSession = Depends(get_session),
 ):
     form = await request.form()
-    email = form.get("email", "").strip() or None
+    email = (form.get("email", "").strip().lower()) or None
     phone = form.get("phone", "").strip() or None
     name = form.get("name", "").strip()
     categories = _parse_categories_form(form.getlist("categories"))
@@ -1333,7 +1333,7 @@ async def admin_edit_subscriber(
 
     form = await request.form()
     sub.name = form.get("name", "").strip()
-    sub.email = form.get("email", "").strip() or None
+    sub.email = (form.get("email", "").strip().lower()) or None
     sub.phone = form.get("phone", "").strip() or None
     sub.categories = _parse_categories_form(form.getlist("categories"))
     sub.notify_email = "notify_email" in form
