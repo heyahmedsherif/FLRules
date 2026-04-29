@@ -221,6 +221,26 @@ def _log_alert_to_file(alert: Alert, notice_url: str):
     log.info("alert_logged_to_file", path=str(ALERTS_LOG), notice_id=alert.notice_id)
 
 
+async def send_manage_link_email(email: str, name: str, manage_url: str) -> bool:
+    """Send a magic-link email so an existing subscriber can access their settings."""
+    if not email:
+        return False
+    greeting = f"Hi {name},\n\n" if name else "Hi,\n\n"
+    body = (
+        f"{greeting}"
+        "You requested a link to manage your FL Rules Monitor subscription.\n\n"
+        f"Manage your preferences: {manage_url}\n\n"
+        "From this page you can:\n"
+        "  - Change your alert categories\n"
+        "  - Switch between email and SMS\n"
+        "  - Update your phone number\n"
+        "  - Unsubscribe entirely\n\n"
+        "If you did not request this email, you can safely ignore it.\n\n"
+        "— FL Rules Monitor"
+    )
+    return _send_email(email, "Manage your FL Rules Monitor subscription", body)
+
+
 async def send_opt_in_email(email: str, name: str = "", unsubscribe_token: str = "") -> bool:
     """Send a welcome email when a subscriber is added."""
     if not email:

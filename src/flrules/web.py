@@ -109,6 +109,10 @@ async def public_signup_page():
       <button type="submit" class="btn" style="width:100%;padding:0.75rem;font-size:1rem">Subscribe to Alerts</button>
     </form>
 
+    <p style="text-align:center;margin-top:1rem;font-size:0.85rem;color:#64748b">
+      Already subscribed? <a href="/login" style="color:#2563eb">Manage your preferences &rarr;</a>
+    </p>
+
     <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e2e8f0">
       <p style="font-size:0.75rem;color:#94a3b8;line-height:1.5">
         <strong>Program:</strong> FL Rules Monitor by Intuitive Dataframe, LLC<br>
@@ -153,7 +157,9 @@ async def public_signup_submit(
 <div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
   <h3>Already Subscribed</h3>
   <p>This email address is already subscribed to FL Rules Monitor alerts.</p>
-  <a class="btn" href="/signup">Back</a>
+  <p style="font-size:0.9rem;color:#475569;margin-top:1rem">Want to change your settings or unsubscribe? We can email you a secure link to manage your preferences.</p>
+  <a class="btn" href="/login" style="margin-top:0.5rem">Email me a manage link</a>
+  <a class="btn btn-outline" href="/signup" style="margin-left:0.5rem">Back</a>
 </div>""", logged_in=False))
 
     sub = Subscriber(
@@ -478,6 +484,7 @@ async def home(
     <h2 style="font-size:1.2rem;margin-bottom:0.5rem">Subscribe to Alerts</h2>
     <p style="color:#475569;margin-bottom:1rem">Get notified by email and/or SMS when relevant notices are published.</p>
     <a class="btn" href="/signup" style="padding:0.75rem 1.5rem;font-size:1rem">Subscribe Now</a>
+    <p style="margin-top:1rem;font-size:0.85rem;color:#64748b">Already subscribed? <a href="/login" style="color:#2563eb">Manage your preferences &rarr;</a></p>
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem">
@@ -921,6 +928,62 @@ async def my_unsubscribe(
 
 
 # ── Public manage / unsubscribe (no login required) ──
+
+@app.get("/login", response_class=HTMLResponse)
+async def public_login_request():
+    """Public page for existing subscribers to request a manage-link email."""
+    return HTMLResponse(content=_page("Access Your Subscription", """
+<div style="max-width:520px;margin:3rem auto">
+  <div class="card" style="max-width:100%">
+    <h2 style="margin-top:0">Access Your Subscription</h2>
+    <p style="color:#475569;font-size:0.9rem;line-height:1.6">
+      Already subscribed? Enter your email and we'll send you a secure link to manage
+      your alert categories, switch between email and SMS, or unsubscribe.
+    </p>
+    <form method="post" action="/login" style="margin-top:1.5rem">
+      <div class="form-group">
+        <label>Email address</label>
+        <input type="email" name="email" class="input" placeholder="you@example.com" required>
+      </div>
+      <button type="submit" class="btn" style="width:100%;padding:0.75rem">Email me a manage link</button>
+    </form>
+    <p style="margin-top:1.5rem;font-size:0.8rem;color:#94a3b8;text-align:center">
+      Not subscribed yet? <a href="/signup" style="color:#2563eb">Sign up here</a>
+    </p>
+  </div>
+</div>""", logged_in=False))
+
+
+@app.post("/login")
+async def public_login_send(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Look up subscriber by email and send them their /manage link.
+
+    Always shows the same confirmation regardless of whether the email exists,
+    to avoid leaking subscriber list information.
+    """
+    form = await request.form()
+    email = form.get("email", "").strip().lower()
+
+    if email:
+        result = await session.execute(
+            select(Subscriber).where(Subscriber.email == email)
+        )
+        sub = result.scalar_one_or_none()
+        if sub and sub.active and sub.unsubscribe_token:
+            from flrules.notifier import send_manage_link_email
+            manage_url = f"{settings.app_url}/manage/{sub.unsubscribe_token}"
+            asyncio.create_task(send_manage_link_email(sub.email, sub.name, manage_url))
+
+    return HTMLResponse(content=_page("Check Your Email", """
+<div class="card" style="text-align:center;max-width:520px;margin:3rem auto">
+  <h3>Check Your Email</h3>
+  <p>If that email is subscribed to FL Rules Monitor, we just sent you a secure link to manage your preferences.</p>
+  <p style="font-size:0.85rem;color:#94a3b8;margin-top:1rem">The email may take a minute to arrive. Check your spam folder if you don't see it.</p>
+</div>""", logged_in=False))
+
 
 @app.get("/manage/{token}", response_class=HTMLResponse)
 async def public_manage(
