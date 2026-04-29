@@ -920,7 +920,98 @@ async def my_unsubscribe(
     return RedirectResponse(url="/my/settings", status_code=302)
 
 
-# ── Public unsubscribe (no login required) ──────────
+# ── Public manage / unsubscribe (no login required) ──
+
+@app.get("/manage/{token}", response_class=HTMLResponse)
+async def public_manage(
+    token: str,
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Subscriber).where(Subscriber.unsubscribe_token == token)
+    )
+    sub = result.scalar_one_or_none()
+
+    if not sub:
+        return HTMLResponse(content=_page("Manage Subscription", """
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>Invalid Link</h3>
+  <p>This subscription link is not valid.</p>
+</div>""", logged_in=False))
+
+    if not sub.active:
+        return HTMLResponse(content=_page("Manage Subscription", """
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>Subscription Inactive</h3>
+  <p>This subscription has been deactivated. Contact your administrator to re-subscribe.</p>
+</div>""", logged_in=False))
+
+    category_picker = _category_checkboxes(sub.categories or "all")
+    email_chk = "checked" if sub.notify_email else ""
+    sms_chk = "checked" if sub.notify_sms else ""
+
+    return HTMLResponse(content=_page("Manage Subscription", f"""
+<div style="max-width:600px;margin:2rem auto">
+  <div class="card" style="max-width:100%">
+    <h2 style="margin-top:0">Manage Your Subscription</h2>
+    <p style="color:#64748b;font-size:0.9rem">
+      Update your alert preferences below. Changes save when you click "Save Changes".
+    </p>
+    <form method="post" action="/manage/{token}">
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" class="input" value="{_esc(sub.email or "")}" disabled style="background:#f1f5f9">
+        <span style="font-size:0.75rem;color:#94a3b8">To change your email, contact your administrator.</span>
+      </div>
+      <div class="form-group">
+        <label>Mobile Phone (for SMS alerts)</label>
+        <input type="tel" name="phone" class="input" value="{_esc(sub.phone or "")}" placeholder="+1XXXXXXXXXX">
+        <span style="font-size:0.75rem;color:#94a3b8">US numbers only. Include country code (+1).</span>
+      </div>
+      <div class="form-group">
+        <label>Alert Categories</label>
+        {category_picker}
+      </div>
+      <div class="form-group" style="display:flex;gap:1.5rem">
+        <label><input type="checkbox" name="notify_email" {email_chk}> Email alerts</label>
+        <label><input type="checkbox" name="notify_sms" {sms_chk}> SMS alerts</label>
+      </div>
+      <button type="submit" class="btn" style="width:100%;padding:0.75rem">Save Changes</button>
+    </form>
+    <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e2e8f0;text-align:center">
+      <a href="/unsubscribe/{token}" style="color:#dc2626;font-size:0.85rem">Unsubscribe from all alerts</a>
+    </div>
+  </div>
+</div>""", logged_in=False))
+
+
+@app.post("/manage/{token}")
+async def public_manage_save(
+    token: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Subscriber).where(Subscriber.unsubscribe_token == token)
+    )
+    sub = result.scalar_one_or_none()
+    if not sub or not sub.active:
+        return RedirectResponse(url=f"/manage/{token}", status_code=302)
+
+    form = await request.form()
+    sub.phone = form.get("phone", "").strip() or None
+    sub.categories = _parse_categories_form(form.getlist("categories"))
+    sub.notify_email = "notify_email" in form
+    sub.notify_sms = "notify_sms" in form
+    await session.commit()
+
+    return HTMLResponse(content=_page("Subscription Updated", f"""
+<div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
+  <h3>Settings Saved</h3>
+  <p>Your subscription preferences have been updated.</p>
+  <a class="btn btn-outline" href="/manage/{token}" style="margin-top:1rem">Back to Settings</a>
+</div>""", logged_in=False))
+
 
 @app.get("/unsubscribe/{token}", response_class=HTMLResponse)
 async def public_unsubscribe(
@@ -950,10 +1041,14 @@ async def public_unsubscribe(
 <div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
   <h3>Unsubscribe from FL Rules Monitor</h3>
   <p>Are you sure you want to stop receiving alerts at <strong>{_esc(sub.email or sub.phone or "")}</strong>?</p>
+  <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:1rem;margin:1rem 0;text-align:left">
+    <p style="margin:0 0 0.5rem;font-weight:600;color:#0c4a6e">Want fewer alerts instead of unsubscribing?</p>
+    <p style="margin:0 0 0.75rem;font-size:0.85rem;color:#0369a1">You can pick specific categories, turn off SMS, or turn off email — without unsubscribing entirely.</p>
+    <a class="btn btn-outline" href="/manage/{token}" style="font-size:0.85rem">Manage my preferences</a>
+  </div>
   <form method="post" action="/unsubscribe/{token}" style="margin-top:1rem">
-    <button type="submit" class="btn btn-danger">Yes, unsubscribe me</button>
+    <button type="submit" class="btn btn-danger">Yes, unsubscribe me from everything</button>
   </form>
-  <p style="margin-top:1rem;font-size:0.8rem;color:#94a3b8">You can re-subscribe at any time by contacting your administrator.</p>
 </div>""", logged_in=False))
 
 

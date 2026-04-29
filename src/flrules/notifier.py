@@ -88,10 +88,22 @@ def _twilio_client() -> TwilioClient | None:
     return None
 
 
-def _build_alert_body(alert: Alert, notice_url: str, unsubscribe_url: str = "") -> str:
+def _build_alert_body(
+    alert: Alert,
+    notice_url: str,
+    unsubscribe_url: str = "",
+    manage_url: str = "",
+) -> str:
     """Build a plain-text alert body (used as email fallback)."""
     tier_label, _, _ = _score_tier(alert.relevance_score)
-    unsub_line = f"\nUnsubscribe: {unsubscribe_url}\n" if unsubscribe_url else ""
+    links_block = ""
+    if manage_url or unsubscribe_url:
+        parts = []
+        if manage_url:
+            parts.append(f"Manage your preferences: {manage_url}")
+        if unsubscribe_url:
+            parts.append(f"Unsubscribe: {unsubscribe_url}")
+        links_block = "\n" + "\n".join(parts) + "\n"
     return f"""[{tier_label}] Florida Administrative Register Alert
 
 Category: {alert.category.replace('_', ' ').title()}
@@ -116,18 +128,27 @@ Learn more: {settings.app_url}/about
 What this means: This notice was flagged because it contains language related to
 {alert.category.replace('_', ' ')}. We recommend reviewing the full text to assess
 whether it may affect your community or requires advocacy action.
-{unsub_line}"""
+{links_block}"""
 
 
-def _build_alert_html(alert: Alert, notice_url: str, unsubscribe_url: str = "") -> str:
+def _build_alert_html(
+    alert: Alert,
+    notice_url: str,
+    unsubscribe_url: str = "",
+    manage_url: str = "",
+) -> str:
     """Build an HTML alert email with color-coded severity banner."""
     tier_label, color, _ = _score_tier(alert.relevance_score)
     cat_label = alert.category.replace("_", " ").title()
     about_url = f"{settings.app_url}/about"
-    unsub_html = (
-        f'<p style="font-size:12px;color:#94a3b8;margin-top:24px">'
-        f'<a href="{unsubscribe_url}" style="color:#94a3b8">Unsubscribe</a></p>'
-        if unsubscribe_url else ""
+    footer_links = []
+    if manage_url:
+        footer_links.append(f'<a href="{manage_url}" style="color:#94a3b8">Manage preferences</a>')
+    if unsubscribe_url:
+        footer_links.append(f'<a href="{unsubscribe_url}" style="color:#94a3b8">Unsubscribe</a>')
+    footer_html = (
+        f'<p style="font-size:12px;color:#94a3b8;margin-top:24px">{" &middot; ".join(footer_links)}</p>'
+        if footer_links else ""
     )
     return f"""<!DOCTYPE html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;margin:0;padding:24px;color:#0f172a">
@@ -158,7 +179,7 @@ def _build_alert_html(alert: Alert, notice_url: str, unsubscribe_url: str = "") 
         This notice was flagged because it contains language related to {cat_label.lower()}.
         We recommend reviewing the full text to assess whether it may affect your community or requires advocacy action.
       </p>
-      {unsub_html}
+      {footer_html}
     </div>
   </div>
 </body></html>"""
@@ -206,10 +227,14 @@ async def send_opt_in_email(email: str, name: str = "", unsubscribe_token: str =
         return False
 
     greeting = f"Hi {name},\n\n" if name else "Hi,\n\n"
-    unsub_line = ""
+    links_block = ""
     if unsubscribe_token:
+        manage_url = f"{settings.app_url}/manage/{unsubscribe_token}"
         unsub_url = f"{settings.app_url}/unsubscribe/{unsubscribe_token}"
-        unsub_line = f"\nUnsubscribe: {unsub_url}\n"
+        links_block = (
+            f"\nManage your preferences (categories, email/SMS): {manage_url}\n"
+            f"Unsubscribe from all alerts: {unsub_url}\n"
+        )
 
     body = (
         f"{greeting}"
@@ -219,10 +244,11 @@ async def send_opt_in_email(email: str, name: str = "", unsubscribe_token: str =
         "What to expect:\n"
         "  - Email alerts when relevant notices are published\n"
         "  - Alert frequency varies (typically a few per week)\n\n"
-        "If you did not expect this message or wish to unsubscribe, "
-        "click the link below.\n\n"
+        "You can update your alert categories or switch between email/SMS at "
+        "any time using the Manage link below. To stop receiving alerts entirely, "
+        "use the Unsubscribe link.\n\n"
         "— FLRules Monitor\n"
-        f"{unsub_line}"
+        f"{links_block}"
     )
 
     return _send_email(email, "Welcome to FL Rules Monitor", body)
@@ -236,13 +262,15 @@ async def send_email_alert(
         return False
 
     unsub_url = ""
+    manage_url = ""
     if subscriber.unsubscribe_token:
         unsub_url = f"{settings.app_url}/unsubscribe/{subscriber.unsubscribe_token}"
+        manage_url = f"{settings.app_url}/manage/{subscriber.unsubscribe_token}"
 
     tier_label, _, _ = _score_tier(alert.relevance_score)
     subject = f"[{tier_label}] FL Register Alert: {alert.category.replace('_', ' ').title()}"
-    body = _build_alert_body(alert, notice_url, unsub_url)
-    html = _build_alert_html(alert, notice_url, unsub_url)
+    body = _build_alert_body(alert, notice_url, unsub_url, manage_url)
+    html = _build_alert_html(alert, notice_url, unsub_url, manage_url)
     return _send_email(subscriber.email, subject, body, html=html)
 
 
