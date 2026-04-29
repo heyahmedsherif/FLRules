@@ -55,6 +55,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.ruff.lint.per-file-ignores]
 "src/flrules/web.py" = ["E501"]  # HTML template strings
 "src/flrules/static_site.py" = ["E501"]  # HTML template strings
+"src/flrules/notifier.py" = ["E501"]  # HTML email template strings
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

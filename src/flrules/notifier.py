@@ -21,18 +21,21 @@ from flrules.models import Alert, Subscriber
 log = structlog.get_logger()
 
 
-def _send_email(to: str, subject: str, body: str) -> bool:
+def _send_email(to: str, subject: str, body: str, html: str | None = None) -> bool:
     """Send an email via Resend API (primary) or SMTP (fallback)."""
     if settings.resend_api_key:
         try:
             resend.api_key = settings.resend_api_key
-            resend.Emails.send({
+            payload = {
                 "from": settings.from_email,
                 "to": [to],
                 "reply_to": "contact@gearnerd.io",
                 "subject": subject,
                 "text": body,
-            })
+            }
+            if html:
+                payload["html"] = html
+            resend.Emails.send(payload)
             log.info("email_sent_resend", to=to, subject=subject)
             return True
         except Exception as e:
@@ -41,7 +44,13 @@ def _send_email(to: str, subject: str, body: str) -> bool:
 
     if settings.smtp_host and settings.smtp_user and settings.smtp_password:
         try:
-            msg = MIMEText(body)
+            if html:
+                from email.mime.multipart import MIMEMultipart
+                msg = MIMEMultipart("alternative")
+                msg.attach(MIMEText(body, "plain"))
+                msg.attach(MIMEText(html, "html"))
+            else:
+                msg = MIMEText(body)
             msg["Subject"] = subject
             msg["From"] = settings.from_email
             msg["To"] = to
@@ -61,6 +70,15 @@ def _send_email(to: str, subject: str, body: str) -> bool:
     log.warning("email_skipped", reason="no Resend API key or SMTP config", to=to)
     return False
 
+
+def _score_tier(score: float) -> tuple[str, str, str]:
+    """Return (tier_label, color_hex, sms_prefix) for a relevance score."""
+    if score >= 5.0:
+        return ("High Priority", "#dc2626", "[HIGH]")
+    if score >= 2.5:
+        return ("Alert", "#ea580c", "[ALERT]")
+    return ("Watch", "#f59e0b", "[WATCH]")
+
 ALERTS_LOG = Path(settings.database_url.split("///")[-1]).parent / "alerts_log.json"
 
 
@@ -71,12 +89,13 @@ def _twilio_client() -> TwilioClient | None:
 
 
 def _build_alert_body(alert: Alert, notice_url: str, unsubscribe_url: str = "") -> str:
-    """Build a plain-language alert body."""
+    """Build a plain-text alert body (used as email fallback)."""
+    tier_label, _, _ = _score_tier(alert.relevance_score)
     unsub_line = f"\nUnsubscribe: {unsubscribe_url}\n" if unsubscribe_url else ""
-    return f"""Florida Administrative Register Alert
+    return f"""[{tier_label}] Florida Administrative Register Alert
 
 Category: {alert.category.replace('_', ' ').title()}
-Relevance Score: {alert.relevance_score:.1f}
+Severity: {tier_label} (score {alert.relevance_score:.1f})
 
 Summary:
 {alert.summary}
@@ -87,18 +106,71 @@ View the full notice:
 {notice_url}
 
 ---
+About relevance scoring:
+  Watch (1.0–2.4): Worth monitoring — single-category match.
+  Alert (2.5–4.9): Notable — overlapping concerns.
+  High Priority (5.0+): Multiple high-weight categories — review promptly.
+
+Learn more: {settings.app_url}/about
+
 What this means: This notice was flagged because it contains language related to
 {alert.category.replace('_', ' ')}. We recommend reviewing the full text to assess
 whether it may affect your community or requires advocacy action.
 {unsub_line}"""
 
 
+def _build_alert_html(alert: Alert, notice_url: str, unsubscribe_url: str = "") -> str:
+    """Build an HTML alert email with color-coded severity banner."""
+    tier_label, color, _ = _score_tier(alert.relevance_score)
+    cat_label = alert.category.replace("_", " ").title()
+    about_url = f"{settings.app_url}/about"
+    unsub_html = (
+        f'<p style="font-size:12px;color:#94a3b8;margin-top:24px">'
+        f'<a href="{unsubscribe_url}" style="color:#94a3b8">Unsubscribe</a></p>'
+        if unsubscribe_url else ""
+    )
+    return f"""<!DOCTYPE html>
+<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#f8fafc;margin:0;padding:24px;color:#0f172a">
+  <div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+    <div style="background:{color};color:#ffffff;padding:16px 24px">
+      <div style="font-size:12px;letter-spacing:0.05em;text-transform:uppercase;opacity:0.9">{tier_label}</div>
+      <div style="font-size:20px;font-weight:700;margin-top:4px">FL Rules Monitor — {cat_label}</div>
+    </div>
+    <div style="padding:24px">
+      <table style="width:100%;font-size:14px;margin-bottom:16px">
+        <tr><td style="color:#64748b;width:120px">Category</td><td style="font-weight:600">{cat_label}</td></tr>
+        <tr><td style="color:#64748b">Severity</td><td style="font-weight:600;color:{color}">{tier_label} (score {alert.relevance_score:.1f})</td></tr>
+        <tr><td style="color:#64748b">Keywords</td><td style="font-family:monospace;font-size:12px;color:#475569">{alert.matched_keywords}</td></tr>
+      </table>
+      <h3 style="font-size:14px;color:#64748b;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">Summary</h3>
+      <p style="font-size:15px;line-height:1.6;margin:0 0 24px">{alert.summary}</p>
+      <a href="{notice_url}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;font-size:14px">View Full Notice &rarr;</a>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:14px;margin-top:24px;font-size:13px;line-height:1.6">
+        <strong style="color:#0f172a">What does this score mean?</strong><br>
+        <span style="color:#475569">
+          <span style="color:#f59e0b">&#9679;</span> <strong>Watch</strong> (1.0–2.4): single-category match worth monitoring.<br>
+          <span style="color:#ea580c">&#9679;</span> <strong>Alert</strong> (2.5–4.9): notable, overlapping concerns.<br>
+          <span style="color:#dc2626">&#9679;</span> <strong>High Priority</strong> (5.0+): multiple high-weight categories — review promptly.
+        </span><br>
+        <a href="{about_url}" style="color:#2563eb;font-size:12px">Learn how relevance is scored &rarr;</a>
+      </div>
+      <p style="font-size:12px;color:#94a3b8;line-height:1.6;margin-top:20px">
+        This notice was flagged because it contains language related to {cat_label.lower()}.
+        We recommend reviewing the full text to assess whether it may affect your community or requires advocacy action.
+      </p>
+      {unsub_html}
+    </div>
+  </div>
+</body></html>"""
+
+
 def _build_sms_body(alert: Alert, notice_url: str) -> str:
-    """Build a concise SMS alert."""
+    """Build a concise SMS alert with severity prefix."""
     cat = alert.category.replace("_", " ").title()
+    _, _, prefix = _score_tier(alert.relevance_score)
     return (
-        f"FL Rules Monitor: {cat} alert — "
-        f"{alert.summary[:120]}... "
+        f"{prefix} FL Rules Monitor: {cat} — "
+        f"{alert.summary[:110]}... "
         f"Details: {notice_url}\n"
         f"Reply STOP to unsubscribe."
     )
@@ -167,9 +239,11 @@ async def send_email_alert(
     if subscriber.unsubscribe_token:
         unsub_url = f"{settings.app_url}/unsubscribe/{subscriber.unsubscribe_token}"
 
-    subject = f"FL Register Alert: {alert.category.replace('_', ' ').title()}"
+    tier_label, _, _ = _score_tier(alert.relevance_score)
+    subject = f"[{tier_label}] FL Register Alert: {alert.category.replace('_', ' ').title()}"
     body = _build_alert_body(alert, notice_url, unsub_url)
-    return _send_email(subscriber.email, subject, body)
+    html = _build_alert_html(alert, notice_url, unsub_url)
+    return _send_email(subscriber.email, subject, body, html=html)
 
 
 async def send_sms_alert(

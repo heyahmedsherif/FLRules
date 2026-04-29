@@ -49,7 +49,8 @@ async def startup():
 @app.get("/signup", response_class=HTMLResponse)
 async def public_signup_page():
     """Public SMS opt-in page — visible to Twilio reviewers and the public."""
-    html = _page("Subscribe to Alerts", """
+    category_picker = _category_checkboxes("all")
+    html = _page("Subscribe to Alerts", f"""
 <div style="max-width:600px;margin:2rem auto">
   <div class="card" style="max-width:100%">
     <div style="text-align:center;margin-bottom:1.5rem">
@@ -87,17 +88,7 @@ async def public_signup_page():
       </div>
       <div class="form-group">
         <label>Alert Categories</label>
-        <select name="categories" class="input">
-          <option value="all">All categories</option>
-          <option value="domestic_terrorism">Domestic Terrorism Designations</option>
-          <option value="religious_freedom">Religious Freedom</option>
-          <option value="immigration">Immigration</option>
-          <option value="civil_rights">Civil Rights</option>
-          <option value="surveillance">Surveillance</option>
-          <option value="cabinet_meeting">Cabinet Meetings</option>
-          <option value="education">Education</option>
-          <option value="nonprofit_regulation">Nonprofit Regulation</option>
-        </select>
+        {category_picker}
       </div>
 
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:1rem 0">
@@ -128,7 +119,7 @@ async def public_signup_page():
         <strong>For help:</strong> Reply HELP to any text message, or email contact@gearnerd.io.<br>
         <strong>Privacy:</strong> Your phone number and email are stored securely and never shared with third parties.
         We only use your contact information to deliver alerts from this service.<br>
-        <a href="/privacy" style="color:#2563eb">Privacy Policy</a> &middot; <a href="/terms" style="color:#2563eb">Terms of Service</a>
+        <a href="/about" style="color:#2563eb">How It Works</a> &middot; <a href="/privacy" style="color:#2563eb">Privacy Policy</a> &middot; <a href="/terms" style="color:#2563eb">Terms of Service</a>
       </p>
     </div>
   </div>
@@ -146,7 +137,7 @@ async def public_signup_submit(
     name = form.get("name", "").strip()
     email = form.get("email", "").strip()
     phone = form.get("phone", "").strip() or None
-    categories = form.get("categories", "all")
+    categories = _parse_categories_form(form.getlist("categories"))
     consent_email = "consent_email" in form
     consent_sms = "consent_sms" in form
 
@@ -293,6 +284,91 @@ async def terms_of_service():
 """, logged_in=False))
 
 
+@app.get("/about", response_class=HTMLResponse)
+async def about_page(request: Request):
+    """Public page explaining how relevance scoring works."""
+    user = await get_current_user(request)
+    return HTMLResponse(content=_page("How It Works", """
+<div style="max-width:760px;margin:2rem auto">
+  <h2>How FL Rules Monitor Works</h2>
+  <p style="color:#64748b;font-size:0.9rem;margin-bottom:1.5rem">Understanding alerts and relevance scoring</p>
+
+  <div style="font-size:0.95rem;color:#334155;line-height:1.7">
+    <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">What we monitor</h3>
+    <p>FL Rules Monitor scans the <a href="https://flrules.org/bigdoc/default.asp" target="_blank" rel="noopener">Florida Administrative Register</a>
+    automatically — hourly during weekday business hours, twice daily on weekends.
+    The Register is where all Florida state agencies publish proposed rules, emergency rules, meeting notices,
+    and other regulatory actions.</p>
+
+    <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">How alerts are scored</h3>
+    <p>Every notice is scanned for keywords across <strong>9 civil-rights-relevant categories</strong>.
+    Each category has a weight reflecting its importance. A notice's <em>relevance score</em>
+    is the sum of weights for every category it matches. Notices with a score of <strong>1.0 or higher</strong> trigger an alert.</p>
+
+    <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:0.9rem">
+      <thead>
+        <tr style="background:#f1f5f9">
+          <th style="text-align:left;padding:0.5rem;border:1px solid #e2e8f0">Category</th>
+          <th style="text-align:left;padding:0.5rem;border:1px solid #e2e8f0">Weight</th>
+          <th style="text-align:left;padding:0.5rem;border:1px solid #e2e8f0">Triggers on</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Domestic Terrorism</td><td style="padding:0.5rem;border:1px solid #e2e8f0">3.0</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Organization designations, material support rules</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Religious Freedom</td><td style="padding:0.5rem;border:1px solid #e2e8f0">3.0</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Mosque, Islamic, hijab, halal, religious discrimination</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Surveillance</td><td style="padding:0.5rem;border:1px solid #e2e8f0">2.5</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Fusion centers, biometrics, watchlists, CVE programs</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Cabinet Meetings</td><td style="padding:0.5rem;border:1px solid #e2e8f0">2.0</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Governor/Cabinet agendas, executive orders</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Immigration</td><td style="padding:0.5rem;border:1px solid #e2e8f0">2.0</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Refugee, asylum, travel ban, ICE cooperation</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Civil Rights</td><td style="padding:0.5rem;border:1px solid #e2e8f0">2.0</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Hate crimes, profiling, anti-discrimination</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Education</td><td style="padding:0.5rem;border:1px solid #e2e8f0">1.5</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Curriculum bans, DEI restrictions, book bans</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Nonprofit Regulation</td><td style="padding:0.5rem;border:1px solid #e2e8f0">1.5</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Charity registration, foreign agent rules</td></tr>
+        <tr><td style="padding:0.5rem;border:1px solid #e2e8f0">Policy General</td><td style="padding:0.5rem;border:1px solid #e2e8f0">0.5</td><td style="padding:0.5rem;border:1px solid #e2e8f0">Emergency rules, public comment periods (only flags when combined)</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">Severity tiers</h3>
+    <p>Each alert is colored and labeled by its score:</p>
+    <ul style="list-style:none;padding:0;margin:0.5rem 0">
+      <li style="padding:0.5rem;border-left:4px solid #f59e0b;background:#fef3c7;margin-bottom:0.5rem;border-radius:4px">
+        <strong style="color:#92400e">Watch (1.0&ndash;2.4)</strong> &mdash; Single-category match worth monitoring.
+      </li>
+      <li style="padding:0.5rem;border-left:4px solid #ea580c;background:#ffedd5;margin-bottom:0.5rem;border-radius:4px">
+        <strong style="color:#9a3412">Alert (2.5&ndash;4.9)</strong> &mdash; Notable; overlapping concerns or higher-weight category.
+      </li>
+      <li style="padding:0.5rem;border-left:4px solid #dc2626;background:#fee2e2;border-radius:4px">
+        <strong style="color:#991b1b">High Priority (5.0+)</strong> &mdash; Multiple high-weight categories; review promptly.
+      </li>
+    </ul>
+
+    <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">Why scoring matters</h3>
+    <p>Each category's weight contributes only <em>once</em> per notice, even if multiple keywords from
+    the same category appear. This prevents single notices from being over-scored just because they repeat
+    a theme. Higher scores indicate that <em>multiple distinct concerns</em> overlap in a single notice
+    &mdash; those tend to deserve the most attention.</p>
+
+    <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">Limitations</h3>
+    <p>This is a keyword-pattern matcher, not a substitute for human review. It may miss notices that use
+    unusual phrasing or flag notices that are not actually relevant. We recommend treating alerts as a
+    starting point for further review by your team.</p>
+
+    <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">Customizing your alerts</h3>
+    <p>Subscribers can choose to receive all categories or pick specific ones from their
+    <a href="/my/settings">settings page</a>. You only get alerts that overlap with your selected categories.</p>
+
+    <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">Source code</h3>
+    <p>FL Rules Monitor is open source. The scoring rules live in
+    <code style="background:#f1f5f9;padding:2px 6px;border-radius:3px;font-size:0.85rem">relevance.py</code>
+    and are reviewed periodically by the operating team.</p>
+
+    <p style="margin-top:2rem;font-size:0.85rem;color:#64748b">
+      Operated by Intuitive Dataframe, LLC for civil rights advocacy.
+      Questions? <a href="mailto:contact@gearnerd.io">contact@gearnerd.io</a>
+    </p>
+  </div>
+</div>
+""", user=user, logged_in=user is not None))
+
+
 # ── Auth routes ─────────────────────────────────────
 
 @app.get("/auth/login", response_class=HTMLResponse)
@@ -405,6 +481,7 @@ async def home(
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem">
+    <a href="/about" style="text-decoration:none;color:#475569;text-align:center;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">How It Works</a>
     <a href="/privacy" style="text-decoration:none;color:#475569;text-align:center;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">Privacy Policy</a>
     <a href="/terms" style="text-decoration:none;color:#475569;text-align:center;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">Terms of Service</a>
     <a href="/auth/login" style="text-decoration:none;color:#475569;text-align:center;padding:1rem;border:1px solid #e2e8f0;border-radius:8px">Staff Login</a>
@@ -719,20 +796,35 @@ async def my_settings(
     sub = result.scalar_one_or_none()
 
     if sub:
+        category_picker = _category_checkboxes(sub.categories or "all")
+        email_chk = "checked" if sub.notify_email else ""
+        sms_chk = "checked" if sub.notify_sms else ""
         status_html = f"""
 <div class="card">
   <h3>Your Subscription</h3>
   <p>Status: <span class="badge" style="background:#10b981">Active</span></p>
-  <p>Email notifications: {"On" if sub.notify_email else "Off"}</p>
-  <p>SMS notifications: {"On" if sub.notify_sms else "Off"}</p>
-  <p>Phone: {sub.phone or "Not set"}</p>
-  <p>Categories: {sub.categories}</p>
+  <form method="post" action="/my/settings/update">
+    <div class="form-group">
+      <label>Phone (for SMS alerts)</label>
+      <input type="tel" name="phone" class="input" value="{_esc(sub.phone or "")}" placeholder="+1XXXXXXXXXX">
+    </div>
+    <div class="form-group">
+      <label>Alert Categories</label>
+      {category_picker}
+    </div>
+    <div class="form-group" style="display:flex;gap:1.5rem">
+      <label><input type="checkbox" name="notify_email" {email_chk}> Email alerts</label>
+      <label><input type="checkbox" name="notify_sms" {sms_chk}> SMS alerts</label>
+    </div>
+    <button type="submit" class="btn">Save Changes</button>
+  </form>
   <form method="post" action="/my/unsubscribe" style="margin-top:1rem">
     <button type="submit" class="btn btn-danger">Unsubscribe</button>
   </form>
 </div>"""
     else:
-        status_html = """
+        category_picker = _category_checkboxes("all")
+        status_html = f"""
 <div class="card">
   <h3>Not Subscribed</h3>
   <p>You are not currently receiving alerts.</p>
@@ -742,17 +834,8 @@ async def my_settings(
       <input type="tel" name="phone" placeholder="+1XXXXXXXXXX" class="input">
     </div>
     <div class="form-group">
-      <label>Categories</label>
-      <select name="categories" class="input">
-        <option value="all">All categories</option>
-        <option value="domestic_terrorism">Domestic Terrorism</option>
-        <option value="religious_freedom">Religious Freedom</option>
-        <option value="immigration">Immigration</option>
-        <option value="civil_rights">Civil Rights</option>
-        <option value="surveillance">Surveillance</option>
-        <option value="cabinet_meeting">Cabinet Meetings</option>
-        <option value="education">Education</option>
-      </select>
+      <label>Alert Categories</label>
+      {category_picker}
     </div>
     <button type="submit" class="btn">Subscribe to Alerts</button>
   </form>
@@ -769,7 +852,7 @@ async def my_subscribe(
 ):
     form = await request.form()
     phone = form.get("phone", "")
-    categories = form.get("categories", "all")
+    categories = _parse_categories_form(form.getlist("categories"))
 
     existing = await session.execute(
         select(Subscriber).where(Subscriber.email == user.email)
@@ -796,6 +879,28 @@ async def my_subscribe(
     if phone:
         asyncio.create_task(send_opt_in_confirmation(phone))
 
+    return RedirectResponse(url="/my/settings", status_code=302)
+
+
+@app.post("/my/settings/update")
+async def my_settings_update(
+    request: Request,
+    user: User = Depends(require_login),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Subscriber).where(Subscriber.email == user.email)
+    )
+    sub = result.scalar_one_or_none()
+    if not sub:
+        return RedirectResponse(url="/my/settings", status_code=302)
+
+    form = await request.form()
+    sub.phone = form.get("phone", "").strip() or None
+    sub.categories = _parse_categories_form(form.getlist("categories"))
+    sub.notify_email = "notify_email" in form
+    sub.notify_sms = "notify_sms" in form
+    await session.commit()
     return RedirectResponse(url="/my/settings", status_code=302)
 
 
@@ -901,7 +1006,7 @@ async def admin_subscribers(
 <td>{_esc(s.email or "")}</td>
 <td>{_esc(s.phone or "")}</td>
 <td>{status}</td>
-<td>{s.categories}</td>
+<td style="font-size:0.85rem">{_esc(_format_categories(s.categories))}</td>
 <td>{channel_str}</td>
 <td style="white-space:nowrap">
   <a href="/admin/subscribers/{s.id}/edit" class="btn btn-outline" style="padding:2px 8px;font-size:0.75rem">Edit</a>
@@ -936,7 +1041,8 @@ async def admin_add_subscriber_form(
     request: Request,
     user: User = Depends(require_admin),
 ):
-    content = """
+    category_picker = _category_checkboxes("all")
+    content = f"""
 <div class="section-header">
   <h2>Add Subscriber</h2>
   <a class="btn btn-outline" href="/admin/subscribers" style="font-size:0.8rem">&larr; Back</a>
@@ -957,17 +1063,7 @@ async def admin_add_subscriber_form(
     </div>
     <div class="form-group">
       <label>Categories</label>
-      <select name="categories" class="input">
-        <option value="all">All categories</option>
-        <option value="domestic_terrorism">Domestic Terrorism</option>
-        <option value="religious_freedom">Religious Freedom</option>
-        <option value="immigration">Immigration</option>
-        <option value="civil_rights">Civil Rights</option>
-        <option value="surveillance">Surveillance</option>
-        <option value="cabinet_meeting">Cabinet Meetings</option>
-        <option value="education">Education</option>
-        <option value="nonprofit_regulation">Nonprofit Regulation</option>
-      </select>
+      {category_picker}
     </div>
     <div class="form-group" style="display:flex;gap:1.5rem">
       <label><input type="checkbox" name="notify_email" checked> Email alerts</label>
@@ -990,7 +1086,7 @@ async def admin_add_subscriber(
     email = form.get("email", "").strip() or None
     phone = form.get("phone", "").strip() or None
     name = form.get("name", "").strip()
-    categories = form.get("categories", "all")
+    categories = _parse_categories_form(form.getlist("categories"))
     notify_email = "notify_email" in form
     notify_sms = "notify_sms" in form
 
@@ -1029,20 +1125,7 @@ async def admin_edit_subscriber_form(
     if not sub:
         return RedirectResponse(url="/admin/subscribers", status_code=302)
 
-    category_options = ""
-    for val, label in [
-        ("all", "All categories"),
-        ("domestic_terrorism", "Domestic Terrorism"),
-        ("religious_freedom", "Religious Freedom"),
-        ("immigration", "Immigration"),
-        ("civil_rights", "Civil Rights"),
-        ("surveillance", "Surveillance"),
-        ("cabinet_meeting", "Cabinet Meetings"),
-        ("education", "Education"),
-        ("nonprofit_regulation", "Nonprofit Regulation"),
-    ]:
-        selected = "selected" if sub.categories == val else ""
-        category_options += f'<option value="{val}" {selected}>{label}</option>'
+    category_picker = _category_checkboxes(sub.categories or "all")
 
     content = f"""
 <div class="section-header">
@@ -1065,7 +1148,7 @@ async def admin_edit_subscriber_form(
     </div>
     <div class="form-group">
       <label>Categories</label>
-      <select name="categories" class="input">{category_options}</select>
+      {category_picker}
     </div>
     <div class="form-group" style="display:flex;gap:1.5rem">
       <label><input type="checkbox" name="notify_email" {"checked" if sub.notify_email else ""}> Email alerts</label>
@@ -1094,7 +1177,7 @@ async def admin_edit_subscriber(
     sub.name = form.get("name", "").strip()
     sub.email = form.get("email", "").strip() or None
     sub.phone = form.get("phone", "").strip() or None
-    sub.categories = form.get("categories", "all")
+    sub.categories = _parse_categories_form(form.getlist("categories"))
     sub.notify_email = "notify_email" in form
     sub.notify_sms = "notify_sms" in form
 
@@ -1220,8 +1303,68 @@ async def api_me(user: User = Depends(require_login)):
 
 # ── HTML helpers ─────────────────────────────────────
 
+CATEGORY_OPTIONS = [
+    ("domestic_terrorism", "Domestic Terrorism"),
+    ("religious_freedom", "Religious Freedom"),
+    ("immigration", "Immigration"),
+    ("civil_rights", "Civil Rights"),
+    ("surveillance", "Surveillance"),
+    ("cabinet_meeting", "Cabinet Meetings"),
+    ("education", "Education"),
+    ("nonprofit_regulation", "Nonprofit Regulation"),
+]
+
+
 def _esc(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _category_checkboxes(selected: str = "all") -> str:
+    """Render the multi-select category picker. `selected` is comma-separated."""
+    selected_set = {s.strip() for s in (selected or "all").split(",") if s.strip()}
+    is_all = "all" in selected_set or not selected_set
+
+    all_checked = "checked" if is_all else ""
+    items = ""
+    for val, label in CATEGORY_OPTIONS:
+        chk = "checked" if (val in selected_set and not is_all) else ""
+        items += (
+            f'<label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.9rem;padding:0.25rem">'
+            f'<input type="checkbox" name="categories" value="{val}" {chk} class="cat-individual" '
+            f'onchange="document.getElementById(\'cat-all\').checked=false">'
+            f'<span>{label}</span></label>'
+        )
+
+    return f"""
+<div style="border:1px solid #e2e8f0;border-radius:6px;padding:0.75rem;background:#fafafa">
+  <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-weight:600;padding-bottom:0.5rem;border-bottom:1px solid #e2e8f0;margin-bottom:0.5rem">
+    <input type="checkbox" id="cat-all" name="categories" value="all" {all_checked}
+      onchange="if(this.checked){{document.querySelectorAll('.cat-individual').forEach(c=>c.checked=false)}}">
+    <span>All categories (recommended)</span>
+  </label>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.25rem">
+    {items}
+  </div>
+  <p style="font-size:0.75rem;color:#94a3b8;margin:0.5rem 0 0">Choose "All" or pick specific categories. Picking individual categories overrides "All".</p>
+</div>"""
+
+
+def _parse_categories_form(values: list[str]) -> str:
+    """Convert form-submitted category values into the stored comma-separated string."""
+    vals = [v for v in values if v]
+    if not vals or "all" in vals:
+        return "all"
+    valid = {v for v, _ in CATEGORY_OPTIONS}
+    selected = [v for v in vals if v in valid]
+    return ",".join(selected) if selected else "all"
+
+
+def _format_categories(cats: str) -> str:
+    """Display a stored category string in human-readable form."""
+    if not cats or cats == "all":
+        return "All"
+    labels = {v: label for v, label in CATEGORY_OPTIONS}
+    return ", ".join(labels.get(c.strip(), c.strip()) for c in cats.split(","))
 
 
 def _page(title: str, content: str, user: User | None = None, logged_in: bool = True) -> str:
