@@ -1,5 +1,6 @@
 """Database engine and session helpers."""
 
+import os
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -8,8 +9,15 @@ from sqlmodel import SQLModel
 
 from flrules.config import settings
 
-# Ensure the data directory exists for SQLite
 _db_url = settings.database_url
+
+# When DATA_DIR is set (e.g. a mounted volume on Railway), override any
+# SQLite path so the file lives on persistent storage. This guarantees
+# subscribers, alerts, and notices survive container redeploys.
+_data_dir = os.environ.get("DATA_DIR")
+if _data_dir and "sqlite" in _db_url:
+    _db_url = f"sqlite+aiosqlite:///{_data_dir.rstrip('/')}/flrules.db"
+
 if "sqlite" in _db_url:
     db_path = _db_url.split("///")[-1]
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)

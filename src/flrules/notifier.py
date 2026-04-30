@@ -7,6 +7,7 @@ Alerts are also logged to a local JSON file for audit.
 """
 
 import json
+import os
 import smtplib
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -79,7 +80,11 @@ def _score_tier(score: float) -> tuple[str, str, str]:
         return ("Alert", "#ea580c", "[ALERT]")
     return ("Watch", "#f59e0b", "[WATCH]")
 
-ALERTS_LOG = Path(settings.database_url.split("///")[-1]).parent / "alerts_log.json"
+_data_dir = os.environ.get("DATA_DIR")
+if _data_dir:
+    ALERTS_LOG = Path(_data_dir) / "alerts_log.json"
+else:
+    ALERTS_LOG = Path(settings.database_url.split("///")[-1]).parent / "alerts_log.json"
 
 
 def _twilio_client() -> TwilioClient | None:
