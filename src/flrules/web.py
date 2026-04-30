@@ -178,12 +178,11 @@ async def public_signup_page():
 
     <div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e2e8f0">
       <p style="font-size:0.75rem;color:#94a3b8;line-height:1.5">
-        <strong>Program:</strong> FL Rules Monitor by Intuitive Dataframe, LLC<br>
         <strong>Purpose:</strong> Automated alerts when Florida state agencies publish rules, regulations, or meeting notices relevant to civil rights.<br>
         <strong>Message frequency:</strong> Varies; typically a few alerts per week.<br>
         <strong>Message and data rates may apply.</strong><br>
         <strong>To opt out:</strong> Reply STOP to any text message, or click the unsubscribe link in any email.<br>
-        <strong>For help:</strong> Reply HELP to any text message, or email contact@gearnerd.io.<br>
+        <strong>For help:</strong> Reply HELP to any text message.<br>
         <strong>Privacy:</strong> Your phone number and email are stored securely and never shared with third parties.
         We only use your contact information to deliver alerts from this service.<br>
         <a href="/about" style="color:#2563eb">How It Works</a> &middot; <a href="/privacy" style="color:#2563eb">Privacy Policy</a> &middot; <a href="/terms" style="color:#2563eb">Terms of Service</a>
@@ -429,10 +428,6 @@ async def about_page(request: Request):
     <code style="background:#f1f5f9;padding:2px 6px;border-radius:3px;font-size:0.85rem">relevance.py</code>
     and are reviewed periodically by the operating team.</p>
 
-    <p style="margin-top:2rem;font-size:0.85rem;color:#64748b">
-      Operated by Intuitive Dataframe, LLC for civil rights advocacy.
-      Questions? <a href="mailto:contact@gearnerd.io">contact@gearnerd.io</a>
-    </p>
   </div>
 </div>
 """, user=user, logged_in=user is not None))
@@ -524,9 +519,6 @@ async def home(
       surveillance programs, immigration policies, or civil rights notices — it sends alerts to opted-in subscribers
       via email and SMS.
     </p>
-    <p style="color:#475569;line-height:1.7">
-      This service is operated by <strong>Intuitive Dataframe, LLC</strong>, a Florida-based civic technology company.
-    </p>
   </div>
 
   <div class="card" style="max-width:100%;margin-bottom:1.5rem">
@@ -558,9 +550,7 @@ async def home(
   </div>
 
   <div style="text-align:center;color:#94a3b8;font-size:0.85rem;padding:1rem;border-top:1px solid #e2e8f0">
-    <p style="margin-bottom:0.25rem"><strong>Operated by:</strong> Intuitive Dataframe, LLC</p>
-    <p style="margin-bottom:0.25rem"><strong>Contact:</strong> <a href="mailto:contact@gearnerd.io" style="color:#2563eb">contact@gearnerd.io</a></p>
-    <p>Tampa, Florida, USA</p>
+    <p>FL Rules Monitor &middot; A free public service alert system</p>
   </div>
 </div>
 """, logged_in=False)
