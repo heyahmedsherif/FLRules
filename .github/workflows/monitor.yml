@@ -1,12 +1,12 @@
-name: Scheduled Monitor
+name: Scheduled Monitor (manual fallback only)
 
+# Scheduled runs are now handled by the cron service on Railway, which writes
+# directly to the persistent /data volume — keeping subscribers and alerts in
+# the same DB that the web app uses. This workflow is retained only as a manual
+# fallback for emergencies (e.g., Railway outage). Note: this workflow's DB is
+# isolated from production, so any subscribers added here will NOT receive alerts.
 on:
-  schedule:
-    # Run every hour during business hours (Mon-Fri 8am-6pm ET)
-    - cron: "0 12-22 * * 1-5"
-    # Run twice daily on weekends
-    - cron: "0 14,22 * * 0,6"
-  workflow_dispatch: # manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: read

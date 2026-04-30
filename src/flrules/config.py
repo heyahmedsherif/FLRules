@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Admin — comma-separated list of Google emails that get admin role
     admin_emails: str = "Ahmed.Sherif@hey.com"
 
+    # Backup — long random token used by the daily backup workflow to fetch the DB
+    backup_token: str = ""
+
     # Logging
     log_level: str = "INFO"
 

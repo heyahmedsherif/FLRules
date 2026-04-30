@@ -14,13 +14,18 @@ Routes:
 """
 
 import asyncio
+import os
 import secrets as _secrets
-from datetime import datetime
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+import aiosqlite
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 from starlette.middleware.sessions import SessionMiddleware
 
 from flrules.auth import (
@@ -1133,6 +1138,49 @@ async def public_unsubscribe_confirm(
   <h3>You've been unsubscribed</h3>
   <p>You will no longer receive FL Rules Monitor alerts. If this was a mistake, please contact your administrator.</p>
 </div>""", logged_in=False))
+
+
+# ── Operational backup endpoint (token-protected) ───
+
+@app.get("/_backup")
+async def backup_db(token: str = Query("")):
+    """Stream an atomic snapshot of the SQLite DB.
+
+    Protected by a long random `BACKUP_TOKEN` env var. Hit by the daily backup
+    workflow which stores the result as a GitHub Actions artifact (free, 30-day
+    retention). Uses SQLite's `VACUUM INTO` for an atomic, consistent copy
+    even while the app is serving live traffic.
+    """
+    expected = settings.backup_token
+    if not expected or not _secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=403, detail="invalid backup token")
+
+    db_url = settings.database_url
+    data_dir = os.environ.get("DATA_DIR")
+    if data_dir and "sqlite" in db_url:
+        db_url = f"sqlite+aiosqlite:///{data_dir.rstrip('/')}/flrules.db"
+    if "sqlite" not in db_url:
+        raise HTTPException(status_code=400, detail="non-sqlite backup not supported")
+
+    db_path = db_url.split("///")[-1]
+    if not Path(db_path).exists():
+        raise HTTPException(status_code=404, detail="database file not found")
+
+    # Atomic snapshot via VACUUM INTO — safer than a raw file copy under load
+    fd, snapshot_path = tempfile.mkstemp(prefix="flrules-backup-", suffix=".db")
+    os.close(fd)
+    Path(snapshot_path).unlink(missing_ok=True)
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute(f"VACUUM INTO '{snapshot_path}'")
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    cleanup = BackgroundTask(lambda: Path(snapshot_path).unlink(missing_ok=True))
+    return FileResponse(
+        snapshot_path,
+        media_type="application/octet-stream",
+        filename=f"flrules-{timestamp}.db",
+        background=cleanup,
+    )
 
 
 # ── Admin pages ──────────────────────────────────────

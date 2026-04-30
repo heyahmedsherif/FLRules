@@ -1,0 +1,51 @@
+name: Daily Backup
+
+on:
+  schedule:
+    # Daily at 06:00 UTC (~2am ET)
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch DB snapshot from Railway
+        env:
+          APP_URL: https://flrules-production.up.railway.app
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+        run: |
+          mkdir -p backups
+          ts=$(date -u +%Y%m%dT%H%M%SZ)
+          out="backups/flrules-${ts}.db"
+
+          # Fail loudly on non-2xx and on body-only errors
+          http_code=$(curl --fail-with-body --silent --show-error \
+            --output "$out" \
+            --write-out "%{http_code}" \
+            --max-time 120 \
+            "$APP_URL/_backup?token=$BACKUP_TOKEN") || {
+            echo "Backup request failed (HTTP $http_code)"
+            exit 1
+          }
+
+          # Sanity-check the file is a real SQLite DB
+          if ! head -c 16 "$out" | grep -q "SQLite format 3"; then
+            echo "Downloaded file is not a SQLite database:"
+            head -c 200 "$out"
+            exit 1
+          fi
+
+          # Compress for smaller artifact
+          gzip "$out"
+          echo "Backup saved: ${out}.gz ($(du -h "${out}.gz" | cut -f1))"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flrules-db-backup
+          path: backups/*.db.gz
+          retention-days: 30
