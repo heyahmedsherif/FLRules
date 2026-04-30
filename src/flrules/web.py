@@ -1513,6 +1513,16 @@ async def admin_resend_alert(
     notice = notice_result.scalar_one_or_none()
     notice_url = notice.url if notice else ""
 
+    # Self-heal legacy alerts whose summary was stored as the old meta-text
+    # format ("Matched categories: ..."). Pull the actual notice description
+    # so subscribers see what the notice is about, not why it matched.
+    if notice and notice.description and alert.summary.startswith("Matched categories"):
+        desc = notice.description.strip()
+        if len(desc) > 280:
+            desc = desc[:277].rstrip() + "..."
+        if desc:
+            alert.summary = desc
+
     sub_result = await session.execute(select(Subscriber))
     subscribers = list(sub_result.scalars().all())
 
