@@ -175,11 +175,42 @@ RULES: list[RelevanceRule] = [
 ]
 
 
+def humanize_pattern(pattern: str) -> str:
+    """Convert a regex pattern into a human-readable keyword for display.
+
+    Subscribers see the matched keyword in alerts; raw regex like
+    `executive\\s+order` is confusing noise. This collapses common
+    regex constructs (\\s+, character classes, non-capturing groups)
+    into the closest natural-language form.
+    """
+    p = pattern
+    # Take the first alternative inside (?:a|b|c) groups
+    p = re.sub(r"\(\?:([^)]+)\)", lambda m: m.group(1).split("|")[0], p)
+    # Character classes [sz] -> first char
+    p = re.sub(r"\[([a-zA-Z]+)\]", lambda m: m.group(1)[0], p)
+    # Whitespace metachars -> single space
+    p = p.replace(r"\s+", " ").replace(r"\s*", " ")
+    # Escaped literals
+    p = p.replace(r"\.", ".").replace(r"\b", "")
+    # Unescape parens (so the next steps can drop optional markers)
+    p = p.replace(r"\(", "(").replace(r"\)", ")")
+    # .* / .+ -> "..."
+    p = re.sub(r"\.[+*]", "...", p)
+    # .? (optional any-char) -> drop
+    p = re.sub(r"\.\?", "", p)
+    # Optional marker after a word char or paren -> drop
+    p = re.sub(r"(?<=[\w()])\?", "", p)
+    # Remaining bare parens
+    p = p.replace("(", "").replace(")", "")
+    # Collapse runs of whitespace
+    return re.sub(r"\s+", " ", p).strip()
+
+
 def score_notice(notice: ScrapedNotice) -> MatchResult:
     """Score a single notice against all relevance rules."""
     searchable = f"{notice.description}\n{notice.full_text}".lower()
     total_score = 0.0
-    matched_keywords: list[str] = []
+    matched_patterns: list[str] = []
     categories: set[str] = set()
 
     for rule in RULES:
@@ -195,12 +226,21 @@ def score_notice(notice: ScrapedNotice) -> MatchResult:
                     if not context_ok:
                         continue
 
-                matched_keywords.append(pattern)
+                matched_patterns.append(pattern)
                 rule_matched = True
 
         if rule_matched:
             total_score += rule.weight
             categories.add(rule.category)
+
+    # Humanize patterns and dedupe (different rules can produce the same display form)
+    seen: set[str] = set()
+    matched_keywords: list[str] = []
+    for raw in matched_patterns:
+        human = humanize_pattern(raw)
+        if human and human not in seen:
+            seen.add(human)
+            matched_keywords.append(human)
 
     is_match = total_score >= THRESHOLD
     cat_list = sorted(categories)

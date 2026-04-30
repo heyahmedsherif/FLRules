@@ -93,6 +93,38 @@ def _twilio_client() -> TwilioClient | None:
     return None
 
 
+def _display_keywords(stored: str) -> str:
+    """Render alert.matched_keywords for display, humanizing any raw regex
+    that might be present in legacy rows. Idempotent for already-clean data."""
+    from flrules.relevance import humanize_pattern
+    parts = [humanize_pattern(p.strip()) for p in (stored or "").split(",") if p.strip()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        if p and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return ", ".join(out)
+
+
+def _display_summary(stored: str) -> str:
+    """Strip the most common regex metachar leakage from legacy summary text.
+
+    New alerts store the actual notice description, but pre-existing rows may
+    still hold the old "Matched categories: X. Keywords: \\s+..." format. This
+    is a narrow safety net that doesn't risk damaging legitimate content
+    (e.g., parens or dots in notice descriptions stay intact).
+    """
+    if not stored:
+        return ""
+    return (
+        stored.replace(r"\s+", " ")
+        .replace(r"\s*", " ")
+        .replace(r"\b", "")
+        .replace(r"\.", ".")
+    )
+
+
 def _build_alert_body(
     alert: Alert,
     notice_url: str,
@@ -115,9 +147,9 @@ Category: {alert.category.replace('_', ' ').title()}
 Severity: {tier_label} (score {alert.relevance_score:.1f})
 
 Summary:
-{alert.summary}
+{_display_summary(alert.summary)}
 
-Matched Keywords: {alert.matched_keywords}
+Matched Keywords: {_display_keywords(alert.matched_keywords)}
 
 View the full notice:
 {notice_url}
@@ -166,10 +198,10 @@ def _build_alert_html(
       <table style="width:100%;font-size:14px;margin-bottom:16px">
         <tr><td style="color:#64748b;width:120px">Category</td><td style="font-weight:600">{cat_label}</td></tr>
         <tr><td style="color:#64748b">Severity</td><td style="font-weight:600;color:{color}">{tier_label} (score {alert.relevance_score:.1f})</td></tr>
-        <tr><td style="color:#64748b">Keywords</td><td style="font-family:monospace;font-size:12px;color:#475569">{alert.matched_keywords}</td></tr>
+        <tr><td style="color:#64748b">Keywords</td><td style="font-family:monospace;font-size:12px;color:#475569">{_display_keywords(alert.matched_keywords)}</td></tr>
       </table>
       <h3 style="font-size:14px;color:#64748b;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">Summary</h3>
-      <p style="font-size:15px;line-height:1.6;margin:0 0 24px">{alert.summary}</p>
+      <p style="font-size:15px;line-height:1.6;margin:0 0 24px">{_display_summary(alert.summary)}</p>
       <a href="{notice_url}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;font-size:14px">View Full Notice &rarr;</a>
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:14px;margin-top:24px;font-size:13px;line-height:1.6">
         <strong style="color:#0f172a">What does this score mean?</strong><br>
@@ -196,7 +228,7 @@ def _build_sms_body(alert: Alert, notice_url: str) -> str:
     _, _, prefix = _score_tier(alert.relevance_score)
     return (
         f"{prefix} FL Rules Monitor: {cat} — "
-        f"{alert.summary[:110]}... "
+        f"{_display_summary(alert.summary)[:110]}... "
         f"Details: {notice_url}\n"
         f"Reply STOP to unsubscribe."
     )

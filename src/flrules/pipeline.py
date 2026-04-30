@@ -52,12 +52,20 @@ async def _store_notice(session: AsyncSession, notice: ScrapedNotice) -> FARNoti
 async def _store_alert(
     session: AsyncSession, notice: ScrapedNotice, match_result
 ) -> Alert:
+    # Subscribers want to know what the notice is about, not a meta-description
+    # of why it matched. Use the notice's own description as the summary, with
+    # the match reason kept as a fallback for sparse notices.
+    desc = (notice.description or "").strip()
+    if len(desc) > 280:
+        desc = desc[:277].rstrip() + "..."
+    summary = desc or match_result.summary_reason
+
     alert = Alert(
         notice_id=notice.notice_id,
         matched_keywords=", ".join(match_result.matched_keywords[:10]),
         relevance_score=match_result.score,
         category=", ".join(match_result.categories),
-        summary=match_result.summary_reason,
+        summary=summary,
     )
     session.add(alert)
     await session.flush()
