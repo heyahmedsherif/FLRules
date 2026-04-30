@@ -364,7 +364,7 @@ async def about_page(request: Request):
   <div style="font-size:0.95rem;color:#334155;line-height:1.7">
     <h3 style="font-size:1.1rem;margin:1.5rem 0 0.5rem">What we monitor</h3>
     <p>FL Rules Monitor scans the <a href="https://flrules.org/bigdoc/default.asp" target="_blank" rel="noopener">Florida Administrative Register</a>
-    automatically — hourly during weekday business hours, twice daily on weekends.
+    automatically — every hour around the clock on weekdays, every two hours on weekends.
     The Register is where all Florida state agencies publish proposed rules, emergency rules, meeting notices,
     and other regulatory actions.</p>
 
