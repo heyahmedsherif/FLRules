@@ -586,15 +586,26 @@ async def _dashboard(
     alerts = result.scalars().all()
 
     alert_rows = ""
+    is_admin = user.role == "admin"
     for a in alerts:
         ts = a.created_at.strftime("%Y-%m-%d %H:%M") if isinstance(a.created_at, datetime) else str(a.created_at)
         notified = "&#10003;" if a.notified else "&middot;"
+        action_cell = ""
+        if is_admin:
+            label = "Resend" if a.notified else "Send"
+            action_cell = (
+                f'<td class="center"><form method="post" action="/admin/alerts/{a.id}/send" style="display:inline" '
+                f'onsubmit="return confirm(\'Send this alert to all matching subscribers?\')">'
+                f'<button type="submit" class="btn btn-outline" style="padding:2px 8px;font-size:0.75rem">{label}</button>'
+                f'</form></td>'
+            )
         alert_rows += f"""<tr>
 <td>{ts}</td>
 <td><span class="badge">{a.category}</span></td>
 <td>{a.relevance_score:.1f}</td>
 <td>{_esc(a.summary[:150])}</td>
 <td class="center">{notified}</td>
+{action_cell}
 </tr>"""
 
     admin_actions = ""
@@ -649,9 +660,9 @@ async def _dashboard(
 </div>
 <div class="table-wrap">
 <table>
-  <thead><tr><th>Date</th><th>Category</th><th>Score</th><th>Summary</th><th>Sent</th></tr></thead>
+  <thead><tr><th>Date</th><th>Category</th><th>Score</th><th>Summary</th><th>Sent</th>{'<th></th>' if is_admin else ''}</tr></thead>
   <tbody>
-    {alert_rows if alert_rows else '<tr><td colspan="5" class="empty">No alerts yet. The system is monitoring.</td></tr>'}
+    {alert_rows if alert_rows else f'<tr><td colspan="{6 if is_admin else 5}" class="empty">No alerts yet. The system is monitoring.</td></tr>'}
   </tbody>
 </table>
 </div>
@@ -1477,6 +1488,40 @@ async def admin_delete_subscriber(
         await session.delete(sub)
         await session.commit()
     return RedirectResponse(url="/admin/subscribers", status_code=302)
+
+
+@app.post("/admin/alerts/{alert_id}/send")
+async def admin_resend_alert(
+    alert_id: int,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Send an existing alert to all matching subscribers (idempotent re-send).
+
+    Useful for testing the notification path when the pipeline already
+    de-duped against this alert, or for re-sending if a previous delivery
+    failed. Marks `notified=True` once dispatched.
+    """
+    result = await session.execute(select(Alert).where(Alert.id == alert_id))
+    alert = result.scalar_one_or_none()
+    if not alert:
+        return RedirectResponse(url="/", status_code=302)
+
+    notice_result = await session.execute(
+        select(FARNotice).where(FARNotice.notice_id == alert.notice_id)
+    )
+    notice = notice_result.scalar_one_or_none()
+    notice_url = notice.url if notice else ""
+
+    sub_result = await session.execute(select(Subscriber))
+    subscribers = list(sub_result.scalars().all())
+
+    from flrules.notifier import notify_subscribers
+    await notify_subscribers(subscribers, alert, notice_url)
+
+    alert.notified = True
+    await session.commit()
+    return RedirectResponse(url="/", status_code=302)
 
 
 @app.get("/admin/run", response_class=HTMLResponse)
