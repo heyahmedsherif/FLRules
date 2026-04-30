@@ -44,9 +44,67 @@ app = FastAPI(title="FLRules Monitor", version="0.2.0")
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 
 
+# ── In-process scheduler ─────────────────────────────
+# We schedule the FAR pipeline inside the web process via APScheduler so it
+# writes to the same persistent volume as the dashboard. This replaces the
+# previous GitHub Actions cron, which had its own ephemeral DB and never
+# notified real production subscribers. Disable in dev with SCHEDULER=off.
+import logging as _logging  # noqa: E402
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # noqa: E402
+from apscheduler.triggers.cron import CronTrigger  # noqa: E402
+
+_scheduler_log = _logging.getLogger("flrules.scheduler")
+_scheduler: AsyncIOScheduler | None = None
+
+
+async def _scheduled_pipeline_run():
+    """Run the FAR pipeline once, log stats. Called by APScheduler on schedule."""
+    from flrules.pipeline import run_pipeline
+    try:
+        stats = await run_pipeline(issue_count=5, notify=True)
+        _scheduler_log.info("scheduled_pipeline_complete stats=%s", stats)
+    except Exception as e:
+        _scheduler_log.exception("scheduled_pipeline_failed error=%s", e)
+
+
 @app.on_event("startup")
 async def startup():
     await init_db()
+
+    # Skip scheduler if explicitly disabled (e.g., in tests or one-shot runs)
+    if os.environ.get("SCHEDULER", "on").lower() in {"off", "false", "0"}:
+        _scheduler_log.info("scheduler_disabled via SCHEDULER env var")
+        return
+
+    global _scheduler
+    _scheduler = AsyncIOScheduler(timezone="America/New_York")
+    # Mon-Fri, every hour from 8am to 6pm ET (matches prior GH Actions schedule)
+    _scheduler.add_job(
+        _scheduled_pipeline_run,
+        CronTrigger(day_of_week="mon-fri", hour="8-18", minute=0),
+        id="far_pipeline_business_hours",
+        max_instances=1,
+        coalesce=True,
+    )
+    # Sat/Sun at 10am and 6pm ET
+    _scheduler.add_job(
+        _scheduled_pipeline_run,
+        CronTrigger(day_of_week="sat,sun", hour="10,18", minute=0),
+        id="far_pipeline_weekend",
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.start()
+    _scheduler_log.info("scheduler_started jobs=%s", [j.id for j in _scheduler.get_jobs()])
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+        _scheduler_log.info("scheduler_stopped")
 
 
 # ── Public pages (no login required) ────────────────
