@@ -79,18 +79,18 @@ async def startup():
 
     global _scheduler
     _scheduler = AsyncIOScheduler(timezone="America/New_York")
-    # Mon-Fri, every hour from 8am to 6pm ET (matches prior GH Actions schedule)
+    # Mon-Fri: every hour, 24/7 — catches overnight emergency rules within the hour
     _scheduler.add_job(
         _scheduled_pipeline_run,
-        CronTrigger(day_of_week="mon-fri", hour="8-18", minute=0),
-        id="far_pipeline_business_hours",
+        CronTrigger(day_of_week="mon-fri", hour="*", minute=0),
+        id="far_pipeline_weekday",
         max_instances=1,
         coalesce=True,
     )
-    # Sat/Sun at 10am and 6pm ET
+    # Sat/Sun: every 2 hours, 24/7 — lighter cadence since FAR rarely publishes weekends
     _scheduler.add_job(
         _scheduled_pipeline_run,
-        CronTrigger(day_of_week="sat,sun", hour="10,18", minute=0),
+        CronTrigger(day_of_week="sat,sun", hour="*/2", minute=0),
         id="far_pipeline_weekend",
         max_instances=1,
         coalesce=True,
