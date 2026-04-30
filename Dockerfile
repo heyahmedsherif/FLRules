@@ -14,7 +14,10 @@ RUN uv pip install --system -e .
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
+# Make the universal entrypoint executable
+RUN chmod +x /app/scripts/entrypoint.sh
+
 EXPOSE 8000
 
-# Default: run the web dashboard + scheduler
-CMD ["uvicorn", "flrules.web:app", "--host", "0.0.0.0", "--port", "8000"]
+# Picks web vs cron mode via SERVICE_ROLE env var (default: web)
+CMD ["/app/scripts/entrypoint.sh"]
