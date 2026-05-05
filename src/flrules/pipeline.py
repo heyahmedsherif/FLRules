@@ -5,16 +5,27 @@ Called on a schedule (default: hourly) or manually via CLI.
 """
 
 import secrets
+from datetime import datetime, timedelta
 
+import httpx
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from flrules.archive import submit_to_archive
+from flrules.config import settings
 from flrules.db import async_session, init_db
 from flrules.models import Alert, FARIssue, FARNotice, Subscriber
 from flrules.notifier import notify_subscribers, send_opt_in_confirmation, send_opt_in_email
+from flrules.provenance import GENESIS_PREV_HASH, build_entry
 from flrules.relevance import filter_notices
-from flrules.scraper import ScrapedNotice, fetch_latest_issue_ids, scrape_issue
+from flrules.scraper import (
+    SECTIONS_TO_MONITOR,
+    ScrapedNotice,
+    fetch_latest_issue_ids,
+    scrape_issue,
+    scrape_section,
+)
 from flrules.static_site import generate_static_site
 
 log = structlog.get_logger()
@@ -77,6 +88,102 @@ async def _get_active_subscribers(session: AsyncSession) -> list[Subscriber]:
     return list(result.scalars().all())
 
 
+async def _current_chain_head(session: AsyncSession) -> str:
+    """Return the chain_hash of the most recently inserted notice, or the
+    genesis sentinel if the chain is empty. Notices written before the chain
+    feature was deployed have empty chain_hash and are skipped."""
+    result = await session.execute(
+        select(FARNotice.chain_hash)
+        .where(FARNotice.chain_hash != "")
+        .order_by(FARNotice.id.desc())
+        .limit(1)
+    )
+    head = result.scalar_one_or_none()
+    return head or GENESIS_PREV_HASH
+
+
+async def _check_for_disappearances(
+    session: AsyncSession, stats: dict
+) -> None:
+    """For each of the most-recent N issues we already have stored, re-scrape
+    its sections and create a 'disappearance' alert for any notice_id that we
+    previously saw but is no longer present on the live site. Rate-limited per
+    issue by settings.verify_interval_hours."""
+    cutoff = datetime.utcnow() - timedelta(hours=settings.verify_interval_hours)
+
+    result = await session.execute(
+        select(FARIssue).order_by(FARIssue.iid.desc()).limit(settings.verify_recent_issues)
+    )
+    issues_to_check = list(result.scalars().all())
+
+    for issue in issues_to_check:
+        if issue.last_verified_at and issue.last_verified_at > cutoff:
+            log.debug("disappearance_check_skipped_recent", iid=issue.iid)
+            continue
+
+        stored_ids: set[int] = set()
+        result = await session.execute(
+            select(FARNotice.notice_id).where(FARNotice.issue_iid == issue.iid)
+        )
+        stored_ids = {row[0] for row in result.fetchall()}
+        if not stored_ids:
+            continue
+
+        live_ids: set[int] = set()
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": settings.user_agent},
+                timeout=30.0,
+                follow_redirects=True,
+            ) as client:
+                for section_num in SECTIONS_TO_MONITOR:
+                    try:
+                        notices = await scrape_section(client, issue.iid, section_num)
+                        live_ids.update(n.notice_id for n in notices)
+                    except Exception as e:
+                        log.warning(
+                            "disappearance_check_section_failed",
+                            iid=issue.iid,
+                            section=section_num,
+                            error=str(e),
+                        )
+        except Exception as e:
+            log.warning("disappearance_check_failed", iid=issue.iid, error=str(e))
+            continue
+
+        # If the live fetch returned nothing at all, treat as a transient site
+        # error rather than mass disappearance — refusing to alert is the
+        # conservative call here.
+        if not live_ids:
+            log.warning("disappearance_check_no_live_ids", iid=issue.iid)
+            continue
+
+        missing = stored_ids - live_ids
+        for missing_id in missing:
+            alert = Alert(
+                notice_id=missing_id,
+                matched_keywords="disappearance",
+                relevance_score=0.0,
+                category="disappearance",
+                summary=(
+                    f"Notice {missing_id} from issue {issue.iid} was previously "
+                    "observed but is no longer present on flrules.org. This may "
+                    "indicate a withdrawal, a site error, or tampering."
+                ),
+            )
+            session.add(alert)
+            stats.setdefault("disappearances_detected", 0)
+            stats["disappearances_detected"] += 1
+            log.warning(
+                "disappearance_detected",
+                iid=issue.iid,
+                missing_notice_id=missing_id,
+            )
+
+        issue.last_verified_at = datetime.utcnow()
+        session.add(issue)
+
+
 async def run_pipeline(issue_count: int = 3, notify: bool = True) -> dict:
     """
     Main pipeline: fetch → filter → store → notify.
@@ -104,6 +211,11 @@ async def run_pipeline(issue_count: int = 3, notify: bool = True) -> dict:
     log.info("discovered_issues", count=len(recent_issues))
 
     async with async_session() as session:
+        # Chain head is read once at the start of the run and advanced in-memory
+        # as we insert notices. Persisted hashes survive across runs because each
+        # FARNotice records its own chain_hash.
+        chain_head = await _current_chain_head(session)
+
         for issue_meta in recent_issues:
             iid = issue_meta["iid"]
             stats["issues_checked"] += 1
@@ -127,11 +239,43 @@ async def run_pipeline(issue_count: int = 3, notify: bool = True) -> dict:
 
             # 3. Store new notices and run relevance filter
             new_notices: list[ScrapedNotice] = []
+            new_db_notices: list[FARNotice] = []
             for notice in issue.notices:
                 if not await _notice_already_stored(session, notice.notice_id):
-                    await _store_notice(session, notice)
+                    db_notice = await _store_notice(session, notice)
+                    # Cryptographic provenance: link this notice into the chain.
+                    # Pure computation — no I/O, no failure mode beyond bad inputs.
+                    entry = build_entry(
+                        notice_id=notice.notice_id,
+                        section_number=notice.section_number,
+                        agency_code=notice.agency_code,
+                        description=notice.description,
+                        full_text=notice.full_text,
+                        prev_chain_hash=chain_head,
+                    )
+                    db_notice.content_hash = entry.content_hash
+                    db_notice.prev_chain_hash = entry.prev_chain_hash
+                    db_notice.chain_hash = entry.chain_hash
+                    chain_head = entry.chain_hash
                     new_notices.append(notice)
+                    new_db_notices.append(db_notice)
                     stats["notices_new"] += 1
+
+            # 3b. Submit each new notice to the Wayback Machine for an independent,
+            #     timestamped third-party witness. Best-effort: any failure logs and
+            #     proceeds — the archive is not on the critical path for alerting.
+            if settings.archive_enabled and new_db_notices:
+                stats["archive_attempted"] = 0
+                stats["archive_succeeded"] = 0
+                cap = settings.archive_max_per_run
+                for notice, db_notice in list(zip(new_notices, new_db_notices))[:cap]:
+                    stats["archive_attempted"] += 1
+                    result = await submit_to_archive(notice.url)
+                    if result.success:
+                        db_notice.wayback_url = result.wayback_url
+                        db_notice.wayback_timestamp = result.timestamp
+                        session.add(db_notice)
+                        stats["archive_succeeded"] += 1
 
             # 4. Filter for relevant notices
             matches = filter_notices(new_notices)
@@ -151,6 +295,18 @@ async def run_pipeline(issue_count: int = 3, notify: bool = True) -> dict:
                     )
 
             await session.commit()
+
+        # 6. Disappearance detection — re-scrape the most recent stored issues
+        #    and alert on notices that have vanished. Rate-limited and opt-in;
+        #    runs in its own session block so a failure doesn't roll back the
+        #    main pipeline transaction.
+        if settings.verify_disappearances:
+            try:
+                await _check_for_disappearances(session, stats)
+                await session.commit()
+            except Exception as e:
+                log.warning("disappearance_check_unexpected_error", error=str(e))
+                await session.rollback()
 
     # Generate static dashboard for GitHub Pages
     await generate_static_site()

@@ -63,7 +63,10 @@ FAVICON_SVG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' view
 
 
 async def generate_static_site():
-    """Query the DB and write a static HTML dashboard to site/index.html."""
+    """Query the DB and write a static HTML dashboard to site/index.html.
+    Also publishes site/chain.json — the cryptographic chain head — so any
+    outside observer can pin the head at a moment in time and later verify
+    we did not retroactively edit notice history."""
     await init_db()
     SITE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -87,6 +90,33 @@ async def generate_static_site():
             select(FARIssue).order_by(FARIssue.fetched_at.desc()).limit(1)
         )
         latest_issue = result.scalar_one_or_none()
+
+        # Publish the current chain head so external observers can audit. We
+        # write this even when the chain is empty so the file exists with a
+        # known shape from the very first deploy.
+        head_result = await session.execute(
+            select(FARNotice.notice_id, FARNotice.chain_hash, FARNotice.fetched_at)
+            .where(FARNotice.chain_hash != "")
+            .order_by(FARNotice.id.desc())
+            .limit(1)
+        )
+        head_row = head_result.first()
+        chained_count = await session.scalar(
+            select(func.count(FARNotice.id)).where(FARNotice.chain_hash != "")
+        ) or 0
+        chain_head_payload = {
+            "chain_head": head_row[1] if head_row else "",
+            "head_notice_id": head_row[0] if head_row else None,
+            "head_fetched_at": (
+                head_row[2].isoformat() + "Z" if head_row and head_row[2] else None
+            ),
+            "chained_notice_count": chained_count,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+
+    chain_path = SITE_DIR / "chain.json"
+    chain_path.write_text(json.dumps(chain_head_payload, indent=2))
+    log.info("chain_head_published", path=str(chain_path), **chain_head_payload)
 
     now = datetime.utcnow().strftime("%B %d, %Y at %H:%M UTC")
     last_issue_date = latest_issue.publish_date if latest_issue else "No scans yet"

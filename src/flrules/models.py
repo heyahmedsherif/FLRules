@@ -30,6 +30,9 @@ class FARIssue(SQLModel, table=True):
     volume: str = ""
     publish_date: str = ""
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    # Most recent disappearance-verification check. Used to rate-limit the
+    # re-scrape so we don't hammer flrules.org with redundant section reads.
+    last_verified_at: datetime | None = None
 
 
 class FARNotice(SQLModel, table=True):
@@ -48,6 +51,23 @@ class FARNotice(SQLModel, table=True):
     publish_date: str = ""
     url: str = ""
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Independent witness via the Internet Archive Wayback Machine. Empty when the
+    # archive feature is disabled or the submission failed — readers must tolerate
+    # blank values. tamper_detected is set true only after a successful comparison
+    # finds the snapshot's text diverging from what we scraped.
+    wayback_url: str = ""
+    wayback_timestamp: str = ""
+    tamper_detected: bool = False
+
+    # Cryptographic provenance. content_hash is over the substantive observable
+    # content of the notice (see provenance.compute_content_hash). chain_hash links
+    # this notice to every prior one — tampering with any earlier notice
+    # invalidates every subsequent chain_hash. prev_chain_hash points at the
+    # chain head as it stood when this notice was inserted.
+    content_hash: str = ""
+    chain_hash: str = ""
+    prev_chain_hash: str = ""
 
 
 class Alert(SQLModel, table=True):

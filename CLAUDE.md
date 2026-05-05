@@ -32,11 +32,20 @@ GitHub Actions Cron → scraper.py → relevance.py → pipeline.py → notifier
 | `src/flrules/notifier.py` | SMS (Twilio) + email (SMTP) + local JSON audit log |
 | `src/flrules/web.py` | FastAPI dashboard with Google OAuth, admin panel |
 | `src/flrules/auth.py` | Google OAuth 2.0 + role-based access (admin/member) |
-| `src/flrules/static_site.py` | Generates self-contained HTML for GitHub Pages |
+| `src/flrules/static_site.py` | Generates self-contained HTML + chain.json for GitHub Pages |
 | `src/flrules/cli.py` | CLI: `flrules run`, `scrape-test`, `subscribe`, `alerts`, etc. |
 | `src/flrules/models.py` | SQLModel ORM: User, FARIssue, FARNotice, Alert, Subscriber |
 | `src/flrules/config.py` | Pydantic settings from `.env` |
-| `src/flrules/db.py` | Async SQLite engine + session factory |
+| `src/flrules/db.py` | Async SQLite engine + idempotent additive migrations |
+| `src/flrules/archive.py` | Wayback Machine submit/availability/compare (opt-in via `ARCHIVE_ENABLED`) |
+| `src/flrules/provenance.py` | Pure SHA-256 hash chain over substantive notice content (always on) |
+
+## Integrity features
+
+Three guards against post-scrape FAR manipulation:
+- **Wayback archiving** — opt-in (`ARCHIVE_ENABLED=true`). Each notice URL → Save Page Now → snapshot stored on `FARNotice.wayback_url`.
+- **Hash chain** — always on, no config. `content_hash` = SHA-256 of substantive content; `chain_hash` = SHA-256(prev_chain_hash || notice_id || content_hash). Chain head published to `site/chain.json` so external observers can pin it.
+- **Disappearance detection** — implemented but **dormant** (off by default). Re-scrapes recent issues, alerts on missing notice IDs. Enable with `VERIFY_DISAPPEARANCES=true`. Skipped for now because legitimate withdrawals would trigger false positives that CAIR-FL doesn't have triage capacity for; revisit when needed.
 
 ## Deployment
 

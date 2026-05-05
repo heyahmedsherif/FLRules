@@ -159,6 +159,25 @@ docker run -p 8000:8000 --env-file .env -v ./data:/app/data flrules
 - ~7 sections × ~15 notices avg = ~100 page loads per run at 2s intervals = ~3 min per run
 - Well within reasonable use for a government transparency site
 
+## Integrity Verification
+
+Three features guard against the FAR being altered after we have already scraped a notice:
+
+### Wayback Machine archiving (opt-in)
+Each new notice URL is submitted to the Internet Archive's [Save Page Now](https://web.archive.org/save/) API, producing a third-party, timestamped copy on infrastructure we don't control. The snapshot URL is stored alongside the notice. If flrules.org ever serves different content than the archive, we have an independent witness.
+
+Enable with `ARCHIVE_ENABLED=true` in your environment.
+
+### Cryptographic chain of custody (always on)
+Every notice we ingest is hashed (SHA-256 of its substantive content) and chained to the previous notice: `chain_hash = SHA256(prev_chain_hash || notice_id || content_hash)`. Tampering with any earlier notice invalidates every subsequent chain hash, so notice history cannot be quietly rewritten.
+
+The current chain head is published to `site/chain.json` on every run. External observers (journalists, lawyers, auditors) can pin the head at a moment in time and later verify we did not retroactively edit history.
+
+### Disappearance detection (dormant — opt-in when ready)
+Re-scrapes the most recently stored issues and creates an alert if any previously-seen notice ID is no longer visible on the live site. Off by default because legitimate withdrawals will trigger it and require human triage.
+
+Enable with `VERIFY_DISAPPEARANCES=true`. Tune via `VERIFY_RECENT_ISSUES` (default 1) and `VERIFY_INTERVAL_HOURS` (default 24).
+
 ## Development
 
 ```bash

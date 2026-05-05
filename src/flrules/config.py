@@ -58,5 +58,20 @@ class Settings(BaseSettings):
     )
     request_delay_seconds: float = 2.0  # polite crawl delay
 
+    # Wayback Machine archiving — independent witness for tamper detection.
+    # Default off so existing deployments are unchanged; flip to True in .env or
+    # the GitHub Actions workflow env to enable.
+    archive_enabled: bool = False
+    # Cap concurrent archive submissions per pipeline run. Save Page Now allows
+    # ~15/min per IP; we stay well under that with a small concurrency limit.
+    archive_max_per_run: int = 30
+
+    # Disappearance detection — re-scrape recently-known issues and alert if
+    # any previously-stored notice is missing from the live site. Rate-limited
+    # by verify_interval_hours so we don't hammer flrules.org. Default off.
+    verify_disappearances: bool = False
+    verify_recent_issues: int = 1  # how many of the most recent issues to re-check
+    verify_interval_hours: int = 24  # don't re-verify the same issue more often
+
 
 settings = Settings()
