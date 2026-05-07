@@ -73,5 +73,11 @@ class Settings(BaseSettings):
     verify_recent_issues: int = 1  # how many of the most recent issues to re-check
     verify_interval_hours: int = 24  # don't re-verify the same issue more often
 
+    # Admin signup notifications — comma-separated lists. When set, the
+    # configured operators get notified each time a new subscriber signs up.
+    # Empty default = feature off. Phones must be in E.164 (e.g. +15555551234).
+    admin_notify_emails: str = ""
+    admin_notify_phones: str = ""
+
 
 settings = Settings()

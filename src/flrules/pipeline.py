@@ -16,7 +16,12 @@ from flrules.archive import submit_to_archive
 from flrules.config import settings
 from flrules.db import async_session, init_db
 from flrules.models import Alert, FARIssue, FARNotice, Subscriber
-from flrules.notifier import notify_subscribers, send_opt_in_confirmation, send_opt_in_email
+from flrules.notifier import (
+    notify_admins_new_subscriber,
+    notify_subscribers,
+    send_opt_in_confirmation,
+    send_opt_in_email,
+)
 from flrules.provenance import GENESIS_PREV_HASH, build_entry
 from flrules.relevance import filter_notices
 from flrules.scraper import (
@@ -345,5 +350,10 @@ async def add_subscriber(
 
         if phone and notify_sms:
             await send_opt_in_confirmation(phone)
+
+        try:
+            await notify_admins_new_subscriber(sub)
+        except Exception as e:
+            log.warning("admin_notify_unexpected_error", error=str(e))
 
         return sub

@@ -386,6 +386,61 @@ async def send_opt_in_confirmation(phone: str) -> bool:
         return False
 
 
+async def notify_admins_new_subscriber(subscriber: Subscriber) -> dict:
+    """Notify configured operators each time a new subscriber signs up.
+
+    Off unless ADMIN_NOTIFY_EMAILS and/or ADMIN_NOTIFY_PHONES is set. Best-effort:
+    delivery failures log and proceed; this is observability, not a critical path.
+    """
+    stats = {"email_sent": 0, "sms_sent": 0}
+
+    contact = subscriber.email or subscriber.phone or "unknown"
+    name_part = f" ({subscriber.name})" if subscriber.name else ""
+    channels = []
+    if subscriber.notify_email and subscriber.email:
+        channels.append(f"email -> {subscriber.email}")
+    if subscriber.notify_sms and subscriber.phone:
+        channels.append(f"sms -> {subscriber.phone}")
+    channels_str = ", ".join(channels) or "none"
+
+    subject = f"[FL Rules Monitor] New subscriber: {contact}"
+    body = (
+        "A new subscriber just signed up to FL Rules Monitor.\n\n"
+        f"Contact: {contact}{name_part}\n"
+        f"Channels: {channels_str}\n"
+        f"Categories: {subscriber.categories}\n"
+    )
+
+    for raw in (settings.admin_notify_emails or "").split(","):
+        email = raw.strip()
+        if email and _send_email(email, subject, body):
+            stats["email_sent"] += 1
+
+    sms_body = (
+        f"FL Rules Monitor: New subscriber {contact}{name_part}, "
+        f"categories: {subscriber.categories}"
+    )[:320]
+    client = _twilio_client()
+    if client and settings.admin_notify_phones:
+        for raw in settings.admin_notify_phones.split(","):
+            phone = raw.strip()
+            if not phone:
+                continue
+            try:
+                client.messages.create(
+                    body=sms_body,
+                    from_=settings.twilio_from_number,
+                    to=phone,
+                )
+                stats["sms_sent"] += 1
+                log.info("admin_notify_sms_sent", to=phone)
+            except Exception as e:
+                log.error("admin_notify_sms_failed", to=phone, error=str(e))
+
+    log.info("admin_notify_new_subscriber", contact=contact, stats=stats)
+    return stats
+
+
 async def notify_subscribers(
     subscribers: list[Subscriber], alert: Alert, notice_url: str
 ) -> dict:

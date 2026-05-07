@@ -236,13 +236,19 @@ async def public_signup_submit(
     session.add(sub)
     await session.commit()
 
-    from flrules.notifier import send_opt_in_confirmation, send_opt_in_email
+    from flrules.notifier import (
+        notify_admins_new_subscriber,
+        send_opt_in_confirmation,
+        send_opt_in_email,
+    )
 
     if consent_email:
         asyncio.create_task(send_opt_in_email(email, name, sub.unsubscribe_token))
 
     if consent_sms and phone:
         asyncio.create_task(send_opt_in_confirmation(phone))
+
+    asyncio.create_task(notify_admins_new_subscriber(sub))
 
     return HTMLResponse(content=_page("Subscribed", f"""
 <div class="card" style="text-align:center;max-width:500px;margin:3rem auto">
@@ -943,12 +949,18 @@ async def my_subscribe(
     session.add(sub)
     await session.commit()
 
-    from flrules.notifier import send_opt_in_confirmation, send_opt_in_email
+    from flrules.notifier import (
+        notify_admins_new_subscriber,
+        send_opt_in_confirmation,
+        send_opt_in_email,
+    )
 
     asyncio.create_task(send_opt_in_email(user.email, user.name, sub.unsubscribe_token))
 
     if phone:
         asyncio.create_task(send_opt_in_confirmation(phone))
+
+    asyncio.create_task(notify_admins_new_subscriber(sub))
 
     return RedirectResponse(url="/my/settings", status_code=302)
 
